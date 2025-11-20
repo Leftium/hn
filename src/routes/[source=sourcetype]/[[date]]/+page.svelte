@@ -1,22 +1,12 @@
 <script lang="ts">
 	import type { NormalizedStory } from '$lib/fetch-hckrnews';
 	import { FEED_NAMES, FEED_SOURCES } from '$lib';
-	import { onMount } from 'svelte';
 	let { data } = $props();
 	import 'open-props/style';
 	import dayjs from 'dayjs';
 
 	const cutoffTime = data.visitData?.previousSessionOverride ?? null;
 	const feedSource = $derived(FEED_SOURCES.find((f) => f.id === data.source));
-
-	onMount(() => {
-		document.querySelectorAll('a[href="#"]').forEach((link) => {
-			link.addEventListener('click', (e) => {
-				e.preventDefault();
-				window.scrollTo({ top: 0, behavior: 'smooth' });
-			});
-		});
-	});
 
 	function relativeTime(time: number | string): string {
 		const num = typeof time === 'string' ? parseInt(time, 10) : time;
@@ -152,6 +142,8 @@
 		</a>
 		<s-scroll
 			class:new={isNew}
+			role="button"
+			tabindex="0"
 			onclick={(e: MouseEvent) => {
 				e.preventDefault();
 				const target = e.currentTarget as HTMLElement;
@@ -159,6 +151,16 @@
 					behavior: 'smooth',
 					block: 'start'
 				});
+			}}
+			onkeydown={(e: KeyboardEvent) => {
+				if (e.key === 'Enter' || e.key === ' ') {
+					e.preventDefault();
+					const target = e.currentTarget as HTMLElement;
+					target.previousElementSibling?.scrollIntoView({
+						behavior: 'smooth',
+						block: 'start'
+					});
+				}
 			}}
 		>
 			<s-index>{index + 1}</s-index>
@@ -217,11 +219,18 @@
 					</d-metadata>
 				</a>
 			{/if}
-			<a href="#" class="scroll-link">
+			<button
+				type="button"
+				class="scroll-link"
+				onclick={(e: MouseEvent) => {
+					e.preventDefault();
+					window.scrollTo({ top: 0, behavior: 'smooth' });
+				}}
+			>
 				<s-scroll>
 					<s-top-icon>⤒</s-top-icon>
 				</s-scroll>
-			</a>
+			</button>
 		</d-item>
 	{/if}
 
@@ -436,6 +445,11 @@
 		display: contents;
 		color: inherit;
 		text-decoration: none;
+		background: none;
+		border: none;
+		padding: 0;
+		font: inherit;
+		cursor: pointer;
 	}
 
 	s-scroll {

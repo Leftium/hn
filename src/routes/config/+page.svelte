@@ -8,7 +8,7 @@
 
 	const currentSource = data?.source || 'hckrnews';
 	let manualOverride = $state<number | null>(data?.selectedOverride ?? null);
-	let datetimeTimestamp = $state<number | null>(manualOverride);
+	let datetimeTimestamp = $state<number | null>(data?.selectedOverride ?? null);
 
 	let formElement: HTMLFormElement;
 	let datetimeInput: HTMLInputElement;
@@ -350,12 +350,6 @@
 		white-space: nowrap;
 	}
 
-	.coming-soon {
-		font-size: 0.9em;
-		color: light-dark(#999, #666);
-		font-style: italic;
-	}
-
 	.default-label {
 		color: light-dark(#999, #666);
 		font-size: var(--font-size-0);
@@ -421,12 +415,6 @@
 		padding: var(--size-1) var(--size-2);
 		border-radius: 4px;
 		color: light-dark(#ff6600, #ff6600);
-	}
-
-	.reset-button {
-		margin-bottom: var(--size-4);
-		padding: var(--size-2) var(--size-3);
-		font-size: var(--font-size-1);
 	}
 
 	.custom-time-label {
