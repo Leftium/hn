@@ -23,7 +23,7 @@
 	function formatExpiryTime(timestamp: number): string {
 		const date = dayjs.unix(timestamp);
 		const hour = date.hour();
-		const ampm = hour >= 12 ? 'a' : 'a';
+		const ampm = hour >= 12 ? 'p' : 'a';
 		const hour12 = hour % 12 || 12;
 		return `${hour12}:${date.format('mm')}${ampm}`;
 	}
