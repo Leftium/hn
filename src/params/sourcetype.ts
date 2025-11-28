@@ -3,8 +3,8 @@ import type { ParamMatcher } from '@sveltejs/kit';
 export const match: ParamMatcher = (param) => {
 	return [
 		'hckrnews',
-		'top',
-		'new',
+		'news',
+		'newest',
 		'best',
 		'ask',
 		'show',

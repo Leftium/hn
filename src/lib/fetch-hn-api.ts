@@ -14,8 +14,8 @@ interface HNItem {
 }
 
 const ENDPOINTS: Record<string, string> = {
-	top: 'https://hacker-news.firebaseio.com/v0/topstories.json',
-	new: 'https://hacker-news.firebaseio.com/v0/newstories.json',
+	news: 'https://hacker-news.firebaseio.com/v0/topstories.json',
+	newest: 'https://hacker-news.firebaseio.com/v0/newstories.json',
 	best: 'https://hacker-news.firebaseio.com/v0/beststories.json',
 	ask: 'https://hacker-news.firebaseio.com/v0/askstories.json',
 	show: 'https://hacker-news.firebaseio.com/v0/showstories.json',

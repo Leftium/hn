@@ -1,7 +1,7 @@
 export const FEED_NAMES: Record<string, string> = {
 	hckrnews: 'HckrNews',
-	top: 'Top Stories',
-	new: 'New Stories',
+	news: 'Top Stories',
+	newest: 'Newest Stories',
 	best: 'Best Stories',
 	ask: 'Ask HN',
 	show: 'Show HN',
@@ -26,16 +26,16 @@ export const FEED_SOURCES = [
 		available: true
 	},
 	{
-		id: 'top',
+		id: 'news',
 		name: 'Top Stories',
 		description: 'HN /news',
 		category: 'Hacker News',
 		available: true
 	},
 	{
-		id: 'new',
-		name: 'New Stories',
-		description: 'HN /new',
+		id: 'newest',
+		name: 'Newest Stories',
+		description: 'HN /newest',
 		category: 'Hacker News',
 		available: true
 	},

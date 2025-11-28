@@ -68,7 +68,7 @@ export const load: PageServerLoad = async ({ fetch, params, cookies }) => {
 		const hckrResult = await fetchHckrnews(fetch, date);
 		result = hckrResult.stories;
 		previousDate = hckrResult.previousDate;
-	} else if (['top', 'new', 'best', 'ask', 'show', 'jobs'].includes(source)) {
+	} else if (['news', 'newest', 'best', 'ask', 'show', 'jobs'].includes(source)) {
 		if (date) {
 			if (date.includes(':')) {
 				const [start, end] = date.split(':').map(Number);
