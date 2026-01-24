@@ -61,13 +61,6 @@ export const FEED_SOURCES = [
 		available: true
 	},
 	{
-		id: 'jobs',
-		name: 'Jobs',
-		description: 'HN /jobs',
-		category: 'Hacker News',
-		available: true
-	},
-	{
 		id: 'shownew',
 		name: 'Show New',
 		description: 'The newest Show HN posts',
@@ -113,6 +106,13 @@ export const FEED_SOURCES = [
 		id: 'launches',
 		name: 'Launches',
 		description: 'Launches of YC startups',
+		category: 'More lists',
+		available: true
+	},
+	{
+		id: 'jobs',
+		name: 'Jobs',
+		description: 'HN /jobs',
 		category: 'More lists',
 		available: true
 	},

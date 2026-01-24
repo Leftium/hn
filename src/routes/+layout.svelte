@@ -12,7 +12,7 @@
 
 	const availableFeeds = FEED_SOURCES.filter((feed) => feed.available);
 	const mainFeeds = availableFeeds.filter(
-		(feed) => (feed.category === 'Curated' || feed.category === 'Hacker News') && feed.id !== 'jobs'
+		(feed) => feed.category === 'Curated' || feed.category === 'Hacker News'
 	);
 	const moreFeeds = availableFeeds.filter(
 		(feed) => feed.category === 'More lists' && feed.id !== 'launches'
