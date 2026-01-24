@@ -77,7 +77,7 @@ export async function fetchHN(
 		throw new Error(`Unknown HN source: ${source}`);
 	}
 
-	const isClassic = source === 'classic';
+	const usesPagePagination = source === 'classic' || source === 'active';
 	const allStories: NormalizedStory[] = [];
 	const seenIds = new Set<number>();
 	let currentId = startId;
@@ -86,7 +86,7 @@ export async function fetchHN(
 	for (let page = 0; page < pageCount; page++) {
 		try {
 			let url = baseUrl;
-			if (isClassic) {
+			if (usesPagePagination) {
 				if (currentPage > 1) {
 					url = `${baseUrl}?p=${currentPage}`;
 				}
@@ -107,7 +107,7 @@ export async function fetchHN(
 				}
 			}
 
-			if (isClassic) {
+			if (usesPagePagination) {
 				currentPage++;
 			} else {
 				currentId = parsed.nextId || parsed.stories[parsed.stories.length - 1].id.toString();
@@ -120,7 +120,7 @@ export async function fetchHN(
 	const totalItems = startIndex + allStories.length;
 	const nextRange =
 		allStories.length > 0
-			? isClassic
+			? usesPagePagination
 				? `${currentPage}:${totalItems}:${pageCount}`
 				: `${allStories[allStories.length - 1].id}:${totalItems}:${pageCount}`
 			: undefined;

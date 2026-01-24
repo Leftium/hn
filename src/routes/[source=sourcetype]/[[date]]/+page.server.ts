@@ -83,7 +83,7 @@ export const load: PageServerLoad = async ({ fetch, params, cookies }) => {
 		result = apiResult.stories;
 		nextRange = apiResult.nextRange;
 		startIndex = (startPage - 1) * 30;
-	} else if (['shownew', 'noobstories', 'pool', 'classic', 'launches'].includes(source)) {
+	} else if (['shownew', 'noobstories', 'pool', 'classic', 'launches', 'active'].includes(source)) {
 		let startId: string | undefined;
 		let pageCount = defaultPages;
 		let itemIndex = 0;
@@ -103,7 +103,7 @@ export const load: PageServerLoad = async ({ fetch, params, cookies }) => {
 			}
 		}
 
-		if (source === 'classic' && startId) {
+		if ((source === 'classic' || source === 'active') && startId) {
 			const pageNum = parseInt(startId, 10);
 			startIndex = (pageNum - 1) * 30;
 		} else {
@@ -113,7 +113,7 @@ export const load: PageServerLoad = async ({ fetch, params, cookies }) => {
 		const hnResult = await fetchHN(fetch, source, startId, pageCount, startIndex);
 		result = hnResult.stories;
 		nextRange = hnResult.nextRange;
-		startIndex = source === 'classic' ? startIndex : itemIndex;
+		startIndex = source === 'classic' || source === 'active' ? startIndex : itemIndex;
 	} else {
 		const hnResult = await fetchHN(fetch, source);
 		result = hnResult.stories;
