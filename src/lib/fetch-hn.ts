@@ -7,7 +7,8 @@ const SOURCE_URLS: Record<string, string> = {
 	pool: 'https://news.ycombinator.com/pool',
 	classic: 'https://news.ycombinator.com/classic',
 	launches: 'https://news.ycombinator.com/launches',
-	invited: 'https://news.ycombinator.com/invited'
+	invited: 'https://news.ycombinator.com/invited',
+	active: 'https://news.ycombinator.com/active'
 };
 
 function parseHNHTML(html: string): { stories: NormalizedStory[]; nextId?: string } {

@@ -8,7 +8,7 @@ export const FEED_NAMES: Record<string, string> = {
 	jobs: 'Jobs',
 	shownew: 'Show New',
 	asknew: 'Ask New',
-	active: 'Active',
+	active: 'Active Stories',
 	bestcomments: 'Best Comments',
 	noobstories: 'Noob Stories',
 	pool: 'Pool',
@@ -118,10 +118,10 @@ export const FEED_SOURCES = [
 	},
 	{
 		id: 'active',
-		name: 'Active',
+		name: 'Active Stories',
 		description: 'Most active current discussions',
-		category: 'More lists',
-		available: false
+		category: 'Hacker News',
+		available: true
 	},
 	{
 		id: 'bestcomments',
