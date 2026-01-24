@@ -26,7 +26,8 @@ function parseHNHTML(html: string): { stories: NormalizedStory[]; nextId?: strin
 			.replace(/&gt;/g, '>')
 			.replace(/&quot;/g, '"')
 			.replace(/&#x27;/g, "'")
-			.replace(/&#39;/g, "'");
+			.replace(/&#39;/g, "'")
+			.replace(/&#x2F;/g, '/');
 
 		let finalUrl: string | undefined = url;
 		let finalDomain: string | undefined = domain;
