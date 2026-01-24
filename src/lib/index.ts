@@ -12,7 +12,7 @@ export const FEED_NAMES: Record<string, string> = {
 	bestcomments: 'Best Comments',
 	noobstories: 'Noob Stories',
 	pool: 'Pool',
-	classic: 'Classic',
+	classic: 'Classic Stories',
 	launches: 'Launches',
 	invited: 'Invited'
 };
@@ -97,7 +97,7 @@ export const FEED_SOURCES = [
 	},
 	{
 		id: 'classic',
-		name: 'Classic',
+		name: 'Classic Stories',
 		description: 'Frontpage as voted by ancient accounts',
 		category: 'More lists',
 		available: true
