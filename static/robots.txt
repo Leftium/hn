@@ -1,4 +1,11 @@
-# Block crawlers from paginated/dated routes to reduce server load
+# Block aggressive SEO/search bots entirely
+User-agent: AhrefsBot
+Disallow: /
+
+User-agent: PetalBot
+Disallow: /
+
+# Block other crawlers from paginated/dated routes to reduce server load
 User-agent: *
 Disallow: /hckrnews/
 Disallow: /news/
