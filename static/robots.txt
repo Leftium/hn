@@ -1,3 +1,21 @@
-# allow crawling everything by default
+# Block crawlers from paginated/dated routes to reduce server load
 User-agent: *
-Disallow:
+Disallow: /hckrnews/
+Disallow: /news/
+Disallow: /newest/
+Disallow: /best/
+Disallow: /ask/
+Disallow: /show/
+Disallow: /jobs/
+Disallow: /shownew/
+Disallow: /asknew/
+Disallow: /active/
+Disallow: /noobstories/
+Disallow: /pool/
+Disallow: /classic/
+Disallow: /launches/
+Disallow: /invited/
+Disallow: /config
+
+# Allow the main feed pages (no trailing slash = exact match doesn't work in robots.txt)
+# Bots can still access /hckrnews, /news, etc. but not /hckrnews/2025.01.01

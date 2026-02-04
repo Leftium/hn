@@ -207,13 +207,13 @@
 	{#if data.previousDate || data.nextRange}
 		<d-item class="more-link">
 			{#if data.previousDate}
-				<a href="/{data.source}/{data.previousDate}">
+				<a href="/{data.source}/{data.previousDate}" rel="nofollow">
 					<d-metadata>
 						<s-url>More... {data.previousDate}</s-url>
 					</d-metadata>
 				</a>
 			{:else if data.nextRange}
-				<a href="/{data.source}/{data.nextRange}">
+				<a href="/{data.source}/{data.nextRange}" rel="nofollow">
 					<d-metadata>
 						<s-url>More...</s-url>
 					</d-metadata>
