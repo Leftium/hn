@@ -8,6 +8,11 @@
 
 	import '../app.css';
 
+	import { dev } from '$app/environment';
+	import { injectAnalytics } from '@vercel/analytics/sveltekit';
+
+	injectAnalytics({ mode: dev ? 'development' : 'production' });
+
 	let { children, data } = $props();
 
 	const availableFeeds = FEED_SOURCES.filter((feed) => feed.available);
