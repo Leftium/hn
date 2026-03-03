@@ -3,12 +3,13 @@
 	import { FEED_SOURCES } from '$lib';
 	import 'open-props/style';
 	import { browser } from '$app/environment';
+	import { untrack } from 'svelte';
 
 	let { data } = $props();
 
-	const currentSource = data?.source || 'hckrnews';
-	let manualOverride = $state<number | null>(data?.selectedOverride ?? null);
-	let datetimeTimestamp = $state<number | null>(data?.selectedOverride ?? null);
+	const currentSource = untrack(() => data?.source || 'hckrnews');
+	let manualOverride = $state<number | null>(untrack(() => data?.selectedOverride ?? null));
+	let datetimeTimestamp = $state<number | null>(untrack(() => data?.selectedOverride ?? null));
 
 	let formElement: HTMLFormElement;
 	let datetimeInput: HTMLInputElement;

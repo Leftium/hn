@@ -3,9 +3,10 @@
 	import { FEED_NAMES, FEED_SOURCES } from '$lib';
 	let { data } = $props();
 	import 'open-props/style';
+	import { untrack } from 'svelte';
 	import dayjs from 'dayjs';
 
-	const cutoffTime = data.visitData?.previousSessionOverride ?? null;
+	const cutoffTime = untrack(() => data.visitData?.previousSessionOverride ?? null);
 	const feedSource = $derived(FEED_SOURCES.find((f) => f.id === data.source));
 
 	function relativeTime(time: number | string): string {

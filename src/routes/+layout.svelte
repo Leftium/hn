@@ -4,6 +4,7 @@
 	import { FEED_SOURCES } from '$lib';
 	import { browser } from '$app/environment';
 	import { navigating } from '$app/stores';
+	import { untrack } from 'svelte';
 	import dayjs from 'dayjs';
 
 	import '../app.css';
@@ -59,7 +60,7 @@
 		return () => clearInterval(interval);
 	});
 
-	let clientSessionExpires = $state<number | null>(data.sessionExpires || null);
+	let clientSessionExpires = $state<number | null>(untrack(() => data.sessionExpires) || null);
 
 	if (browser) {
 		navigating.subscribe((nav) => {
