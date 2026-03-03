@@ -11,7 +11,6 @@ export const load: PageServerLoad = async ({ fetch, params, cookies }) => {
 	const totalVisits = cookies.get('visits_total');
 	const pagesPerLoadCookie = cookies.get('pages_per_load');
 	const thresholdCookie = cookies.get('new_item_threshold');
-	const sessionStartCookie = cookies.get('session_start');
 
 	const defaultPages = pagesPerLoadCookie ? parseInt(pagesPerLoadCookie, 10) : 1;
 

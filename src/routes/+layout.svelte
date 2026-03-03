@@ -4,6 +4,7 @@
 	import { FEED_SOURCES } from '$lib';
 	import { browser } from '$app/environment';
 	import { navigating } from '$app/stores';
+	import { resolve } from '$app/paths';
 	import { untrack } from 'svelte';
 	import dayjs from 'dayjs';
 
@@ -116,16 +117,16 @@
 			<div class="footer-column">
 				<h3>Lists</h3>
 				<ul>
-					{#each mainFeeds as feed}
-						<li><a href="/{feed.id}">{feed.name}</a></li>
+					{#each mainFeeds as feed (feed.id)}
+						<li><a href={resolve(`/${feed.id}`)}>{feed.name}</a></li>
 					{/each}
 				</ul>
 			</div>
 			<div class="footer-column">
 				<h3>More Lists</h3>
 				<ul>
-					{#each moreFeeds as feed}
-						<li><a href="/{feed.id}">{feed.name}</a></li>
+					{#each moreFeeds as feed (feed.id)}
+						<li><a href={resolve(`/${feed.id}`)}>{feed.name}</a></li>
 					{/each}
 				</ul>
 			</div>

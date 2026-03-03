@@ -2,7 +2,6 @@
 	import dayjs from 'dayjs';
 	import { FEED_SOURCES } from '$lib';
 	import 'open-props/style';
-	import { browser } from '$app/environment';
 	import { untrack } from 'svelte';
 
 	let { data } = $props();
@@ -111,14 +110,14 @@
 
 	<form id="settings-form" method="POST" action="?/updateSettings" bind:this={formElement}>
 		<h2>List <span class="subheader">(which stories shown)</span></h2>
-		{#each Object.entries(groupedFeeds) as [category, feeds]}
+		{#each Object.entries(groupedFeeds) as [category, feeds] (category)}
 			{#if category !== 'Curated'}
 				<h3>
 					{category}
 				</h3>
 			{/if}
 			<div class="radio-group-horizontal">
-				{#each feeds as feed}
+				{#each feeds as feed (feed.id)}
 					<label class:disabled={!feed.available}>
 						<input
 							type="radio"
@@ -142,7 +141,7 @@
 		<div class="pages-header">
 			<h2>Stories per page</h2>
 			<div class="radio-group-inline">
-				{#each [1, 2, 3, 4] as pages}
+				{#each [1, 2, 3, 4] as pages (pages)}
 					<label>
 						<input
 							type="radio"
@@ -204,7 +203,7 @@
 		</label>
 
 		<h4>Recent visits</h4>
-		{#each uniqueVisits as visit, index}
+		{#each uniqueVisits as visit, index (visit)}
 			{@const [date, time] = formatVisitTime(visit).split(' ')}
 			{@const hourDigits = time.split(':')[0]}
 			{@const needsGhost = hourDigits.length === 1}

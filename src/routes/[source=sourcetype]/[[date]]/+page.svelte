@@ -4,6 +4,7 @@
 	let { data } = $props();
 	import 'open-props/style';
 	import { untrack } from 'svelte';
+	import { resolve } from '$app/paths';
 	import dayjs from 'dayjs';
 
 	const cutoffTime = untrack(() => data.visitData?.previousSessionOverride ?? null);
@@ -97,7 +98,7 @@
 	</svg>
 {/snippet}
 
-{#snippet storyItem(story: NormalizedStory, index: number, cutoff: number | null)}
+{#snippet storyItem(story: NormalizedStory, index: number)}
 	{@const id = story.id}
 	{@const dead = story.dead}
 	{@const deleted = story.title === '[deleted]'}
@@ -123,6 +124,7 @@
 	{@const isNew = cutoffTime && (timeFrontpage ? timeFrontpage > cutoffTime : time > cutoffTime)}
 
 	<d-item class:new-item={isNew}>
+		<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- external link -->
 		<a href={link}>
 			<d-title class:dead={dead || deleted}>{title}</d-title>
 			<d-metadata>
@@ -171,7 +173,7 @@
 
 <main>
 	<d-item class="config-info new-item">
-		<a href="/config?from={data.source}">
+		<a href={resolve(`/config?from=${data.source}`)}>
 			<d-title>
 				<strong>{FEED_NAMES[data.source]}</strong>
 				{#if data.visitData}
@@ -192,7 +194,7 @@
 				</d-metadata>
 			{/if}
 		</a>
-		<a href="/config?from={data.source}" class="scroll-link">
+		<a href={resolve(`/config?from=${data.source}`)} class="scroll-link">
 			<s-scroll class="new">
 				<s-config>⚙</s-config>
 			</s-scroll>
@@ -202,19 +204,19 @@
 	{#each data.stories ?? [] as story, index (story.id)}
 		{@const globalIndex =
 			data.startIndex !== undefined ? data.startIndex + index : (data.startPage - 1) * 30 + index}
-		{@render storyItem(story, globalIndex, cutoffTime)}
+		{@render storyItem(story, globalIndex)}
 	{/each}
 
 	{#if data.previousDate || data.nextRange}
 		<d-item class="more-link">
 			{#if data.previousDate}
-				<a href="/{data.source}/{data.previousDate}" rel="nofollow">
+				<a href={resolve(`/${data.source}/${data.previousDate}`)} rel="nofollow">
 					<d-metadata>
 						<s-url>More... {data.previousDate}</s-url>
 					</d-metadata>
 				</a>
 			{:else if data.nextRange}
-				<a href="/{data.source}/{data.nextRange}" rel="nofollow">
+				<a href={resolve(`/${data.source}/${data.nextRange}`)} rel="nofollow">
 					<d-metadata>
 						<s-url>More...</s-url>
 					</d-metadata>

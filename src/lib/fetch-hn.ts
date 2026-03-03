@@ -113,7 +113,7 @@ export async function fetchHN(
 			} else {
 				currentId = parsed.nextId || parsed.stories[parsed.stories.length - 1].id.toString();
 			}
-		} catch (error) {
+		} catch {
 			break;
 		}
 	}
