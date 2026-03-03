@@ -1,40 +1,38 @@
 # HN Reader
 
 Try it out:
+
 - [hn.leftium.com](https://hn.leftium.com) (all frontpage stories, in chronological order)
 - [hn.leftium.com/top](https://hn.leftium.com/top) (if you prefer HN's default order)
 
 <img width="706" height="529" alt="image" src="https://github.com/user-attachments/assets/792f56f1-4c60-4968-88f0-59ccc81bd92d" />
 
-
-
-
-
 ## Major Features/Benefits
 
 ### <kbd>**Page Down**</kbd> for mobile
+
 - Simple tap of gray index region scrolls item to very top.
 - Easier/more convenient than (over) scrolling.
 
-
 ### Visualize new items since last visit
+
 - New stories since last visit marked with orange item number and accent.
 - Manage what date is used in settings.
 
-
 ### Highlight interesting items
+
 - Vote/comment icons turn orange when the count passes 50.
 - After 100, the number also turns orange.
 
-
 ### Extra info
+
 - Full URL
-- Highlight (probable) [*re-upped*](https://hw.leftium.com/#/item/10537417) items
+- Highlight (probable) [_re-upped_](https://hw.leftium.com/#/item/10537417) items
 - Time taken to reach front page
 - Domain and vote count for [dead] items
 
-
 ### Information dense, yet still readable
+
 - Only two lines per story: title + details
 - "points" and "comments" compressed into icons
 - times/durations abbreviated
@@ -42,6 +40,7 @@ Try it out:
 - full URL, with domain highlighted
 
 ## Problems fixed/improvements from previous version ([HckrWeb](https://hw.leftium.com/))
+
 - Works without JS; progressive enhancement
 - More stories fit on screen.
   - About 6 extra stories on desktop. (16 to 22 stories)
