@@ -1,28 +1,44 @@
-# Block aggressive SEO/search bots entirely
-User-agent: AhrefsBot
-Disallow: /
+# Search engines
+User-agent: Googlebot
+Allow: /
 
-User-agent: PetalBot
-Disallow: /
+User-agent: Bingbot
+Allow: /
 
-# Block other crawlers from paginated/dated routes to reduce server load
+# Social preview / link unfurl bots
+User-agent: facebookexternalhit
+Allow: /
+
+User-agent: Twitterbot
+Allow: /
+
+User-agent: LinkedInBot
+Allow: /
+
+User-agent: Slackbot
+Allow: /
+
+User-agent: Discordbot
+Allow: /
+
+User-agent: WhatsApp
+Allow: /
+
+User-agent: Telegram
+Allow: /
+
+User-agent: vkShare
+Allow: /
+
+User-agent: Naverbot
+Allow: /
+
+User-agent: redditbot
+Allow: /
+
+User-agent: Applebot
+Allow: /
+
+# Block everything else (including TikTokSpider, AI crawlers, etc.)
 User-agent: *
-Disallow: /hckrnews/
-Disallow: /news/
-Disallow: /newest/
-Disallow: /best/
-Disallow: /ask/
-Disallow: /show/
-Disallow: /jobs/
-Disallow: /shownew/
-Disallow: /asknew/
-Disallow: /active/
-Disallow: /noobstories/
-Disallow: /pool/
-Disallow: /classic/
-Disallow: /launches/
-Disallow: /invited/
-Disallow: /config
-
-# Allow the main feed pages (no trailing slash = exact match doesn't work in robots.txt)
-# Bots can still access /hckrnews, /news, etc. but not /hckrnews/2025.01.01
+Disallow: /
