@@ -108,10 +108,9 @@
 	<link rel="icon" href={favicon} />
 </svelte:head>
 
-<wrap-page>
-	{@render children?.()}
+{@render children?.()}
 
-	<footer>
+<footer>
 		<div class="footer-content">
 			<div class="footer-column">
 				<h3>Lists</h3>
@@ -184,22 +183,9 @@
 				</ul>
 			</div>
 		</div>
-	</footer>
-</wrap-page>
+</footer>
 
 <style>
-	wrap-page {
-		display: block;
-		box-shadow: var(--shadow-6);
-	}
-
-	@media (min-width: 42.875em) {
-		wrap-page {
-			border-left: 1px solid light-dark(#e6e6df, #3a3a3a);
-			border-right: 1px solid light-dark(#e6e6df, #3a3a3a);
-		}
-	}
-
 	footer {
 		background: light-dark(#e8e8e8, #1a1a1a);
 		border-top: 1px solid light-dark(#e6e6df, #3a3a3a);
