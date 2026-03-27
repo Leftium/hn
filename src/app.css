@@ -2,5 +2,5 @@
 
 :root {
 	--nc-content-width: min(42.875em, 100%);
-	--nc-content-shadow-gap: 1px;
+	--nc-content-shadow-gap: 0px;
 }
