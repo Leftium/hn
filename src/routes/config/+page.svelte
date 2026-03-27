@@ -301,7 +301,7 @@
 
 	.radio-group-horizontal label {
 		display: flex;
-		align-items: baseline;
+		align-items: flex-start;
 		gap: var(--size-2);
 		margin-bottom: var(--size-1);
 		break-inside: avoid;
@@ -309,6 +309,7 @@
 
 	.radio-group-horizontal label input[type='radio'] {
 		flex-shrink: 0;
+		margin-top: 0.25em;
 	}
 
 	.feed-label {
@@ -367,7 +368,7 @@
 	}
 
 	input[type='radio'] {
-		margin-right: var(--size-2);
+		vertical-align: -0.2em;
 	}
 
 	button {
@@ -377,12 +378,14 @@
 		background: light-dark(#f5f5f5, #1a1a1a);
 		border-radius: 6px;
 		font-size: var(--font-size-1);
+		color: light-dark(#666, #999);
 		transition: all 0.15s ease;
 	}
 
 	button:hover {
 		background: light-dark(#e8e8e8, #2a2a2a);
 		border-color: light-dark(#bbb, #555);
+		color: light-dark(#333, #ccc);
 	}
 
 	hr {
@@ -424,7 +427,13 @@
 		margin-bottom: var(--size-3);
 	}
 
+	.custom-time-label input[type='radio'] {
+		align-self: center;
+		margin: 0;
+	}
+
 	.custom-time-label input[type='datetime-local'] {
 		flex: 0 0 auto;
+		margin: 0;
 	}
 </style>

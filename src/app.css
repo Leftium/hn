@@ -1,20 +1,5 @@
-/* based on: https://www.swyx.io/css-100-bytes, https://thecascade.dev/article/least-amount-of-css */
-html {
-	color-scheme: light dark;
+@import '@leftium/nimble.css';
 
-	max-width: min(42.875em, 100%);
-	margin: auto;
-
-	background: light-dark(rgb(250, 250, 250), #1a1a1a);
-	font-family: system-ui;
-}
-
-a {
-	color: light-dark(#0645ad, #4da3ff);
-}
-a:visited {
-	color: light-dark(#0b0080, #9370db);
-}
-a:hover {
-	color: light-dark(#0645ad, #6db3ff);
+:root {
+	--nc-content-width: min(42.875em, 100%);
 }

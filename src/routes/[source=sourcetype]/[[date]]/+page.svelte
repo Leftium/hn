@@ -450,6 +450,7 @@
 		text-decoration: none;
 		background: none;
 		border: none;
+		border-radius: 0;
 		padding: 0;
 		font: inherit;
 		cursor: pointer;
@@ -461,7 +462,9 @@
 		grid-row: 1 / 3;
 		padding: var(--size-2);
 		background: light-dark(rgb(245, 245, 245), #2f2f2f);
+		border: none;
 		border-right: 1px solid light-dark(#e6e6df, #3a3a3a);
+		color: inherit;
 		cursor: pointer;
 		align-self: stretch;
 		align-items: baseline;

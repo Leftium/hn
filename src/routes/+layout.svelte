@@ -1,6 +1,5 @@
 <script lang="ts">
 	import { favicon } from '@leftium/logo';
-	import 'sanitize.css';
 	import { FEED_SOURCES } from '$lib';
 	import { browser } from '$app/environment';
 	import { navigating } from '$app/stores';
