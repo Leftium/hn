@@ -4,3 +4,16 @@
 	--nc-content-width: min(42.875em, 100%);
 	--nc-content-shadow-gap: 0px;
 }
+
+/* nimble.css 0.13.0 added padding-block: var(--nc-spacing) to body for prose vertical rhythm,
+   but this app uses body as a full-bleed layout grid with no top/bottom whitespace. */
+body {
+	padding-block: 0;
+}
+
+/* nimble.css 0.13.0 added margin-block-end: 0.25em to [role=button] for prose vertical rhythm.
+   s-scroll uses role="button" for accessibility but is a layout element inside a grid row,
+   so the bottom margin creates unwanted gaps between rows. */
+:where([role='button']) {
+	margin-block-end: 0;
+}
