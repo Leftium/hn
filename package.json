@@ -11,7 +11,8 @@
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
 		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
 		"format": "prettier --write .",
-		"lint": "prettier --check . && eslint ."
+		"lint": "prettier --check . && eslint .",
+		"knip": "knip"
 	},
 	"devDependencies": {
 		"@eslint/compat": "^2.0.3",
@@ -27,6 +28,7 @@
 		"eslint-config-prettier": "^10.1.8",
 		"eslint-plugin-svelte": "^3.16.0",
 		"globals": "^17.4.0",
+		"knip": "^6.1.0",
 		"open-props": "^1.7.23",
 		"prettier": "^3.8.1",
 		"prettier-plugin-svelte": "^3.5.1",
