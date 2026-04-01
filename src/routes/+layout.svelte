@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { favicon } from '@leftium/logo';
 	import { FEED_SOURCES } from '$lib';
 	import { browser } from '$app/environment';
 	import { navigating } from '$app/stores';
@@ -103,10 +102,6 @@
 		window.location.href = '/';
 	}
 </script>
-
-<svelte:head>
-	<link rel="icon" href={favicon} />
-</svelte:head>
 
 {@render children?.()}
 
