@@ -5,9 +5,11 @@
 	--nc-content-shadow-gap: 0px;
 }
 
-/* nimble.css 0.13.0 added padding-block: var(--nc-spacing) to body for prose vertical rhythm,
-   but this app uses body as a full-bleed layout grid with no top/bottom whitespace. */
+/* nimble.css adds inline gutters on mobile via the body grid column formula:
+   calc(100% - 2 * --nc-spacing). Replace with 100% so the 1fr side columns
+   collapse to zero on small screens. Also remove top/bottom padding. */
 body {
+	grid-template-columns: 1fr min(var(--nc-content-width), 100%) 1fr;
 	padding-block: 0;
 }
 
