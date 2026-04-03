@@ -2,7 +2,6 @@
 
 :root {
 	--nc-content-width: min(42.875em, 100%);
-	--nc-content-shadow-gap: 0px;
 }
 
 /* nimble.css adds inline gutters on mobile via the body grid column formula:
@@ -11,6 +10,14 @@
 body {
 	grid-template-columns: 1fr min(var(--nc-content-width), 100%) 1fr;
 	padding-block: 0;
+}
+
+/* nimble.css adds padding-inline to all body children to match its wider column formula.
+   Since we override the column to exact content-width (no extra room), zero out the padding.
+   Individual components (footer, config page) supply their own padding as needed. */
+body > *,
+body > [style*='display: contents'] > * {
+	padding-inline: 0;
 }
 
 /* nimble.css 0.13.0 added margin-block-end: 0.25em to [role=button] for prose vertical rhythm.
