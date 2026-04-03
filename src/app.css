@@ -4,11 +4,11 @@
 	--nc-content-width: min(42.875em, 100%);
 }
 
-/* nimble.css adds inline gutters on mobile via the body grid column formula:
-   calc(100% - 2 * --nc-spacing). Replace with 100% so the 1fr side columns
-   collapse to zero on small screens. Also remove top/bottom padding. */
+/* nimble.css v0.17+ uses --nc-column-width for both the grid column and shadow width.
+   Override it to exact content-width (no spacing) for edge-to-edge content.
+   Also remove top/bottom padding. */
 body {
-	grid-template-columns: 1fr min(var(--nc-content-width), 100%) 1fr;
+	--nc-column-width: var(--nc-content-width);
 	padding-block: 0;
 }
 
