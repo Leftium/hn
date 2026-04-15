@@ -26,9 +26,12 @@ const HNPWA_API_BASE = 'https://api.hnpwa.com/v0';
 
 export async function fetchHnpwaItem(
 	id: number,
-	fetchFn: typeof fetch = fetch
+	fetchFn: typeof fetch = fetch,
+	/** When true, append a cache-busting query param to bypass the HNPWA CDN cache. */
+	cacheBust = false
 ): Promise<HnpwaItem> {
-	const response = await fetchFn(`${HNPWA_API_BASE}/item/${id}.json?_=${Date.now()}`);
+	const qs = cacheBust ? `?_=${Date.now()}` : '';
+	const response = await fetchFn(`${HNPWA_API_BASE}/item/${id}.json${qs}`);
 
 	if (!response.ok) {
 		throw new Error(`HNPWA API error: ${response.status} ${response.statusText}`);
