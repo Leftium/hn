@@ -13,6 +13,20 @@
 	import 'open-props/style';
 	import dayjs from 'dayjs';
 
+	/** Max indent levels before capping (deeper comments show same indent but retain depth indicator) */
+	const MAX_INDENT = 5;
+
+	/** Cycling color palette for depth indicators — chosen for visual distinction */
+	const DEPTH_COLORS = [
+		'#4a9eda', // blue
+		'#2ea87e', // green
+		'#c4872f', // amber
+		'#d35050', // red
+		'#8b5dd0', // purple
+		'#d06ca0', // pink
+		'#3aa8a0' // teal
+	];
+
 	let { data } = $props();
 
 	const item: HnpwaItem = $derived(data.item);
@@ -127,14 +141,24 @@
 		{@const isDeleted = !comment.user}
 		{@const isOp = !isDead && !!comment.user && comment.user === item.user}
 		{@const isNew = newCommentThreshold !== null && comment.time > newCommentThreshold}
+		{@const indent = Math.min(depth, MAX_INDENT)}
+		{@const colorIndex = depth % DEPTH_COLORS.length}
+		{@const barWidth = depth === 0 ? 0 : Math.min(2 + depth, 14)}
 		<d-comment
 			style:--depth={depth}
+			style:--indent={indent}
+			style:--depth-color={DEPTH_COLORS[colorIndex]}
+			style:--bar-width="{barWidth}px"
+			class:top-level={depth === 0}
 			class:op={isOp}
 			class:deleted={isDeleted && !isDead}
 			class:dead={isDead}
 			class:new-comment={isNew}
 		>
 			<d-comment-meta>
+				{#if depth > 0}
+					<s-depth style:color={DEPTH_COLORS[colorIndex]}>{depth}</s-depth>
+				{/if}
 				{#if isDead}
 					<a href="https://news.ycombinator.com/item?id={comment.id}" class="dead-link">[dead]</a>
 					{#if comment.user}
@@ -163,10 +187,10 @@
 					{@html comment.content}
 				</d-comment-body>
 			{/if}
-			{#if comment.comments.length > 0}
-				{@render commentTree(comment.comments, depth + 1)}
-			{/if}
 		</d-comment>
+		{#if comment.comments.length > 0}
+			{@render commentTree(comment.comments, depth + 1)}
+		{/if}
 	{/each}
 {/snippet}
 
@@ -345,11 +369,20 @@
 
 	d-metadata {
 		display: flex;
+		flex-wrap: wrap;
 		gap: 0.5ch;
 		font-size: 15px;
 		font-weight: var(--font-weight-2);
 		color: light-dark(#222222, #e5e5e5);
 		align-items: center;
+	}
+
+	@media (max-width: 480px) {
+		s-hn-link {
+			flex-basis: 100%;
+			text-align: right;
+			margin-left: 0;
+		}
 	}
 
 	s-comments {
@@ -534,9 +567,17 @@
 	d-comment {
 		display: block;
 		padding: var(--size-2) var(--size-2) var(--size-2)
-			calc(var(--size-3) * var(--depth) + var(--size-2));
+			calc(var(--size-3) * var(--indent, 0) + var(--size-2));
 		border-top: 1px solid light-dark(#e6e6df, #3a3a3a);
+		border-left: var(--bar-width, 0px) solid
+			color-mix(in srgb, var(--depth-color, transparent) 70%, transparent);
 		background: light-dark(#ffffff, #262626);
+		overflow: hidden;
+
+		/* Top-level comments (depth 0) — no colored left border */
+		&.top-level {
+			border-left-color: transparent;
+		}
 
 		&.deleted {
 			opacity: 0.4;
@@ -552,9 +593,19 @@
 		}
 
 		&.new-comment {
-			border-left: 3px solid #ff6600;
+			border-right: 3px solid #ff6600;
 			background: light-dark(rgba(255, 102, 0, 0.03), rgba(255, 102, 0, 0.06));
 		}
+	}
+
+	s-depth {
+		display: inline-block;
+		margin-right: 0.25ch;
+		font-weight: var(--font-weight-6);
+		font-variant-numeric: tabular-nums;
+		opacity: 0.7;
+		user-select: none;
+		cursor: default;
 	}
 
 	d-comment-meta {
