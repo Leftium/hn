@@ -9,7 +9,7 @@
 const DB_NAME = 'hn-app';
 const DB_VERSION = 1;
 const STORE_NAME = 'item-views';
-const MAX_AGE_SECONDS = 30 * 24 * 60 * 60; // 30 days
+const MAX_AGE_SECONDS = 15 * 24 * 60 * 60; // 15 days (HN locks comments at ~14d)
 
 export interface ItemViewRecord {
 	itemId: number;
