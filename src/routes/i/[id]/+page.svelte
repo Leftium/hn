@@ -9,7 +9,7 @@
 		isHiddenComment
 	} from '$lib/item-view-history';
 	import { resolve } from '$app/paths';
-	import { onMount } from 'svelte';
+	import { onMount, tick } from 'svelte';
 	import 'open-props/style';
 	import dayjs from 'dayjs';
 
@@ -39,6 +39,94 @@
 	// null = first visit (no highlights). Set on mount from IndexedDB.
 	let newCommentThreshold = $state<number | null>(null);
 	let newCommentCount = $state(0);
+
+	// Collapse state: Set of comment IDs that are collapsed.
+	// Default: all depth > 0 comments start collapsed.
+	let collapsedIds = $state(new Set<number>());
+
+	// Parent map: child ID → parent ID (for ancestor expansion)
+	let parentMap = $state(new Map<number, number>());
+
+	/** Collect all comment IDs at depth > 0, and build child→parent map */
+	function buildCommentMaps(
+		comments: HnpwaItem[],
+		depth: number,
+		parentId: number | null,
+		collapsed: Set<number>,
+		parents: Map<number, number>
+	) {
+		for (const c of comments) {
+			if (depth > 0) collapsed.add(c.id);
+			if (parentId !== null) parents.set(c.id, parentId);
+			if (c.comments?.length) buildCommentMaps(c.comments, depth + 1, c.id, collapsed, parents);
+		}
+	}
+
+	// Re-initialize collapsed set and parent map whenever item changes
+	$effect(() => {
+		const collapsed = new Set<number>();
+		const parents = new Map<number, number>();
+		buildCommentMaps(item.comments, 0, null, collapsed, parents);
+		collapsedIds = collapsed;
+		parentMap = parents;
+	});
+
+	/** Strip HTML tags and decode entities to plain text for collapsed preview */
+	function stripHtml(html: string): string {
+		return html
+			.replace(/<[^>]+>/g, ' ')
+			.replace(/&#x([0-9a-fA-F]+);/g, (_, hex) => String.fromCodePoint(parseInt(hex, 16)))
+			.replace(/&#(\d+);/g, (_, dec) => String.fromCodePoint(parseInt(dec, 10)))
+			.replace(/&quot;/g, '"')
+			.replace(/&amp;/g, '&')
+			.replace(/&lt;/g, '<')
+			.replace(/&gt;/g, '>')
+			.replace(/&apos;/g, "'")
+			.replace(/\s+/g, ' ')
+			.trim();
+	}
+
+	/** Collect all descendant IDs (visible only) from a comment subtree */
+	function collectDescendantIds(comments: HnpwaItem[], out: number[]) {
+		for (const c of comments) {
+			if (isHiddenComment(c)) continue;
+			out.push(c.id);
+			if (c.comments?.length) collectDescendantIds(c.comments, out);
+		}
+		return out;
+	}
+
+	/** Toggle collapsed state: expand self (if collapsed) + direct children, or collapse entire subtree */
+	function toggleComment(comment: HnpwaItem) {
+		const selfCollapsed = collapsedIds.has(comment.id);
+		const childIds = comment.comments.filter((c) => !isHiddenComment(c)).map((c) => c.id);
+
+		const next = new Set(collapsedIds);
+
+		if (selfCollapsed) {
+			// Expand self + all ancestors + expand direct children
+			next.delete(comment.id);
+			let ancestorId = parentMap.get(comment.id);
+			while (ancestorId !== undefined) {
+				next.delete(ancestorId);
+				ancestorId = parentMap.get(ancestorId);
+			}
+			for (const id of childIds) next.delete(id);
+		} else {
+			// Already expanded: toggle children
+			const anyChildCollapsed = childIds.some((id) => next.has(id));
+			if (anyChildCollapsed) {
+				// Some children collapsed → expand all direct children
+				for (const id of childIds) next.delete(id);
+			} else {
+				// All children expanded → collapse entire subtree
+				const allDescendants = collectDescendantIds(comment.comments, []);
+				for (const id of allDescendants) next.add(id);
+			}
+		}
+
+		collapsedIds = next;
+	}
 
 	onMount(async () => {
 		const previous = await getItemView(item.id);
@@ -144,7 +232,11 @@
 		{@const indent = Math.min(depth, MAX_INDENT)}
 		{@const colorIndex = depth % DEPTH_COLORS.length}
 		{@const barWidth = depth === 0 ? 0 : Math.min(2 + depth, 14)}
+		{@const isCollapsed = collapsedIds.has(comment.id)}
+		{@const hasChildren = comment.comments.filter((c) => !isHiddenComment(c)).length > 0}
+		<!-- svelte-ignore a11y_no_static_element_interactions -->
 		<d-comment
+			data-comment-id={comment.id}
 			style:--depth={depth}
 			style:--indent={indent}
 			style:--depth-color={DEPTH_COLORS[colorIndex]}
@@ -154,6 +246,27 @@
 			class:deleted={isDeleted && !isDead}
 			class:dead={isDead}
 			class:new-comment={isNew}
+			class:collapsed={isCollapsed}
+			class:has-children={hasChildren}
+			onclick={async (e: MouseEvent) => {
+				// Don't toggle when clicking links
+				if ((e.target as HTMLElement).closest('a')) return;
+				// Capture position before DOM changes
+				const el = document.querySelector(`[data-comment-id="${comment.id}"]`);
+				const rectBefore = el?.getBoundingClientRect();
+				toggleComment(comment);
+				// Wait for Svelte DOM flush
+				await tick();
+				if (!el || !rectBefore) return;
+				// Restore scroll position so comment stays in place
+				const rectAfter = el.getBoundingClientRect();
+				const shift = rectAfter.top - rectBefore.top;
+				if (Math.abs(shift) > 1) {
+					window.scrollBy(0, shift);
+				}
+				el.classList.add('just-clicked');
+				setTimeout(() => el.classList.remove('just-clicked'), 1200);
+			}}
 		>
 			<d-comment-meta>
 				{#if depth > 0}
@@ -182,7 +295,10 @@
 					<s-time>{relativeTime(comment.time)}</s-time>
 				{/if}
 			</d-comment-meta>
-			{#if comment.content && !isDead}
+			{#if isCollapsed && comment.content && !isDead}
+				<s-collapsed-preview>{stripHtml(comment.content)}</s-collapsed-preview>
+			{/if}
+			{#if !isCollapsed && comment.content && !isDead}
 				<d-comment-body>
 					{@html comment.content}
 				</d-comment-body>
@@ -596,6 +712,34 @@
 			border-right: 3px solid #ff6600;
 			background: light-dark(rgba(255, 102, 0, 0.03), rgba(255, 102, 0, 0.06));
 		}
+
+		&.has-children,
+		&.collapsed {
+			cursor: pointer;
+		}
+
+		&:global(.just-clicked) {
+			background: light-dark(rgba(74, 158, 218, 0.12), rgba(74, 158, 218, 0.15)) !important;
+			transition: background 0s;
+		}
+
+		/* Fade out after class is removed */
+		&:not(:global(.just-clicked)) {
+			transition: background 0.8s ease-out;
+		}
+
+		&.collapsed {
+			display: flex;
+			align-items: baseline;
+			gap: 0;
+			padding-top: var(--size-1);
+			padding-bottom: var(--size-1);
+
+			d-comment-meta {
+				margin-bottom: 0;
+				flex-shrink: 0;
+			}
+		}
 	}
 
 	s-depth {
@@ -606,6 +750,16 @@
 		opacity: 0.7;
 		user-select: none;
 		cursor: default;
+	}
+
+	s-collapsed-preview {
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		font-size: var(--font-size-0);
+		color: light-dark(#666, #888);
+		margin-left: 1ch;
 	}
 
 	d-comment-meta {
