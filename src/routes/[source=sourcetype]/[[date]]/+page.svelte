@@ -112,9 +112,7 @@
 		? dayjs.unix(timeFrontpage).diff(dayjs.unix(time), 'hour')
 		: 0}
 
-	{@const link = dead
-		? `https://news.ycombinator.com/item?id=${id}`
-		: `https://hw.leftium.com/#/item/${id}`}
+	{@const link = dead ? `https://news.ycombinator.com/item?id=${id}` : resolve(`/i/${id}`)}
 	{@const domain = story.domain}
 	{@const path = story.url
 		?.replace(/^https:\/\/(www.)?/, '')
@@ -124,7 +122,6 @@
 	{@const isNew = cutoffTime && (timeFrontpage ? timeFrontpage > cutoffTime : time > cutoffTime)}
 
 	<d-item class:new-item={isNew}>
-		<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- external link -->
 		<a href={link}>
 			<d-title class:dead={dead || deleted}>{title}</d-title>
 			<d-metadata>
