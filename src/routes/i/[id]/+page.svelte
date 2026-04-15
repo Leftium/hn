@@ -1,7 +1,13 @@
 <script lang="ts">
 	import type { HnpwaItem } from '$lib/fetch-hnpwa';
 	import { domainify } from '$lib/fetch-hnpwa';
-	import { getItemView, recordItemView, countNewComments } from '$lib/item-view-history';
+	import {
+		getItemView,
+		recordItemView,
+		countNewComments,
+		countVisibleComments,
+		isHiddenComment
+	} from '$lib/item-view-history';
 	import { resolve } from '$app/paths';
 	import { onMount } from 'svelte';
 	import 'open-props/style';
@@ -11,6 +17,9 @@
 
 	const item: HnpwaItem = $derived(data.item);
 	const domain = $derived(item.domain || domainify(item.url));
+
+	// Derive comment count from tree walk (HNPWA's comments_count inflates by including deleted/dead)
+	const visibleCommentCount = $derived(countVisibleComments(item.comments));
 
 	// New-comment tracking: threshold is the viewedAt from the previous visit.
 	// null = first visit (no highlights). Set on mount from IndexedDB.
@@ -26,7 +35,7 @@
 		}
 
 		// Record this visit (always, even on first view)
-		await recordItemView(item.id, item.comments_count);
+		await recordItemView(item.id, visibleCommentCount);
 	});
 
 	const hnItemUrl = $derived(`https://news.ycombinator.com/item?id=${item.id}`);
@@ -113,18 +122,28 @@
 {/snippet}
 
 {#snippet commentTree(comments: HnpwaItem[], depth: number)}
-	{#each comments.filter((c) => c.user || c.comments.length > 0) as comment (comment.id)}
+	{#each comments.filter((c) => !isHiddenComment(c)) as comment (comment.id)}
+		{@const isDead = comment.content === '<p>[dead]'}
 		{@const isDeleted = !comment.user}
-		{@const isOp = !!comment.user && comment.user === item.user}
+		{@const isOp = !isDead && !!comment.user && comment.user === item.user}
 		{@const isNew = newCommentThreshold !== null && comment.time > newCommentThreshold}
 		<d-comment
 			style:--depth={depth}
 			class:op={isOp}
-			class:deleted={isDeleted}
+			class:deleted={isDeleted && !isDead}
+			class:dead={isDead}
 			class:new-comment={isNew}
 		>
 			<d-comment-meta>
-				{#if isDeleted}
+				{#if isDead}
+					<a href="https://news.ycombinator.com/item?id={comment.id}" class="dead-link">[dead]</a>
+					{#if comment.user}
+						<a href="https://news.ycombinator.com/user?id={comment.user}" class="dead-link">
+							{comment.user}
+						</a>
+					{/if}
+					<s-time>{relativeTime(comment.time)}</s-time>
+				{:else if isDeleted}
 					<s-author class="deleted">[deleted]</s-author>
 				{:else}
 					<a href="https://news.ycombinator.com/user?id={comment.user}" class="author-link">
@@ -139,7 +158,7 @@
 					<s-time>{relativeTime(comment.time)}</s-time>
 				{/if}
 			</d-comment-meta>
-			{#if comment.content}
+			{#if comment.content && !isDead}
 				<d-comment-body>
 					{@html comment.content}
 				</d-comment-body>
@@ -177,11 +196,11 @@
 
 			<d-metadata>
 				<s-comments
-					class:high={item.comments_count >= 100}
-					class:mid={item.comments_count >= 50 && item.comments_count < 100}
+					class:high={visibleCommentCount >= 100}
+					class:mid={visibleCommentCount >= 50 && visibleCommentCount < 100}
 				>
 					<a href={hnItemUrl} class="meta-link">
-						{item.comments_count}
+						{visibleCommentCount}
 						{@render message()}
 					</a>
 				</s-comments>
@@ -523,6 +542,10 @@
 			opacity: 0.4;
 		}
 
+		&.dead {
+			opacity: 0.5;
+		}
+
 		&.op d-comment-meta s-author {
 			color: #ff6600;
 			font-weight: var(--font-weight-6);
@@ -549,6 +572,17 @@
 
 		&:hover {
 			color: #ff6600;
+			text-decoration: underline;
+		}
+	}
+
+	.dead-link {
+		color: light-dark(#d89899, #a06060);
+		font-style: italic;
+		font-size: var(--font-size-0);
+		text-decoration: none;
+
+		&:hover {
 			text-decoration: underline;
 		}
 	}

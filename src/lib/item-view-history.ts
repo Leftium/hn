@@ -114,19 +114,45 @@ async function evictStaleEntries(): Promise<void> {
 	});
 }
 
+type CommentLike = {
+	time: number;
+	user: string | null;
+	content: string;
+	comments: CommentLike[];
+};
+
 /**
- * Count comments newer than a threshold in a nested comment tree.
- * Walks the full tree recursively. Skips deleted leaf comments
- * (same filter as the render logic).
+ * Whether a comment should be hidden from display.
+ * Deleted leaf comments (no user, no children) are hidden.
+ * Dead comments have a user + content "<p>[dead]" — always visible.
+ * Deleted non-leaf comments are kept for thread structure.
  */
-export function countNewComments(
-	comments: { time: number; user: string | null; comments: any[] }[],
-	threshold: number
-): number {
+export function isHiddenComment(c: CommentLike): boolean {
+	return !c.user && c.comments.length === 0;
+}
+
+/**
+ * Count visible comments in a nested tree.
+ * Includes dead comments (have content). Excludes deleted leaves.
+ */
+export function countVisibleComments(comments: CommentLike[]): number {
 	let count = 0;
 	for (const c of comments) {
-		// Skip deleted leaf comments (no user AND no children)
-		if (!c.user && c.comments.length === 0) continue;
+		if (isHiddenComment(c)) continue;
+		count++;
+		count += countVisibleComments(c.comments);
+	}
+	return count;
+}
+
+/**
+ * Count comments newer than a threshold in a nested comment tree.
+ * Walks the full tree recursively. Same visibility filter as rendering.
+ */
+export function countNewComments(comments: CommentLike[], threshold: number): number {
+	let count = 0;
+	for (const c of comments) {
+		if (isHiddenComment(c)) continue;
 
 		if (c.time > threshold) {
 			count++;
