@@ -1,7 +1,9 @@
 <script lang="ts">
 	import type { HnpwaItem } from '$lib/fetch-hnpwa';
 	import { domainify } from '$lib/fetch-hnpwa';
+	import { getItemView, recordItemView, countNewComments } from '$lib/item-view-history';
 	import { resolve } from '$app/paths';
+	import { onMount } from 'svelte';
 	import 'open-props/style';
 	import dayjs from 'dayjs';
 
@@ -9,6 +11,23 @@
 
 	const item: HnpwaItem = $derived(data.item);
 	const domain = $derived(item.domain || domainify(item.url));
+
+	// New-comment tracking: threshold is the viewedAt from the previous visit.
+	// null = first visit (no highlights). Set on mount from IndexedDB.
+	let newCommentThreshold = $state<number | null>(null);
+	let newCommentCount = $state(0);
+
+	onMount(async () => {
+		const previous = await getItemView(item.id);
+
+		if (previous) {
+			newCommentThreshold = previous.viewedAt;
+			newCommentCount = countNewComments(item.comments, previous.viewedAt);
+		}
+
+		// Record this visit (always, even on first view)
+		await recordItemView(item.id, item.comments_count);
+	});
 
 	const hnItemUrl = $derived(`https://news.ycombinator.com/item?id=${item.id}`);
 	const hnUserUrl = $derived(
@@ -97,7 +116,13 @@
 	{#each comments.filter((c) => c.user || c.comments.length > 0) as comment (comment.id)}
 		{@const isDeleted = !comment.user}
 		{@const isOp = !!comment.user && comment.user === item.user}
-		<d-comment style:--depth={depth} class:op={isOp} class:deleted={isDeleted}>
+		{@const isNew = newCommentThreshold !== null && comment.time > newCommentThreshold}
+		<d-comment
+			style:--depth={depth}
+			class:op={isOp}
+			class:deleted={isDeleted}
+			class:new-comment={isNew}
+		>
 			<d-comment-meta>
 				{#if isDeleted}
 					<s-author class="deleted">[deleted]</s-author>
@@ -107,6 +132,9 @@
 					</a>
 					{#if isOp}
 						<s-op-badge>OP</s-op-badge>
+					{/if}
+					{#if isNew}
+						<s-new-badge>NEW</s-new-badge>
 					{/if}
 					<s-time>{relativeTime(comment.time)}</s-time>
 				{/if}
@@ -157,6 +185,9 @@
 						{@render message()}
 					</a>
 				</s-comments>
+				{#if newCommentCount > 0}
+					<s-new-count>{newCommentCount} new</s-new-count>
+				{/if}
 				<s-points
 					class:high={(item.points ?? 0) >= 100}
 					class:mid={(item.points ?? 0) >= 50 && (item.points ?? 0) < 100}
@@ -496,6 +527,11 @@
 			color: #ff6600;
 			font-weight: var(--font-weight-6);
 		}
+
+		&.new-comment {
+			border-left: 3px solid #ff6600;
+			background: light-dark(rgba(255, 102, 0, 0.03), rgba(255, 102, 0, 0.06));
+		}
 	}
 
 	d-comment-meta {
@@ -531,6 +567,25 @@
 		border-radius: 3px;
 		vertical-align: baseline;
 		line-height: 1.5;
+	}
+
+	s-new-badge {
+		display: inline-block;
+		padding: 0 0.4em;
+		font-size: 0.75em;
+		font-weight: var(--font-weight-7);
+		color: #ff6600;
+		background: light-dark(rgba(255, 102, 0, 0.12), rgba(255, 102, 0, 0.2));
+		border-radius: 3px;
+		vertical-align: baseline;
+		line-height: 1.5;
+	}
+
+	s-new-count {
+		color: #ff6600;
+		font-weight: var(--font-weight-5);
+		font-size: 0.9em;
+		white-space: nowrap;
 	}
 
 	d-comment-meta s-time {
