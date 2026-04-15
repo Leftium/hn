@@ -94,7 +94,7 @@
 {/snippet}
 
 {#snippet commentTree(comments: HnpwaItem[], depth: number)}
-	{#each comments as comment (comment.id)}
+	{#each comments.filter((c) => c.user || c.comments.length > 0) as comment (comment.id)}
 		{@const isDeleted = !comment.user}
 		{@const isOp = !!comment.user && comment.user === item.user}
 		<d-comment style:--depth={depth} class:op={isOp} class:deleted={isDeleted}>
