@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { HnpwaItem } from '$lib/fetch-hnpwa';
 	import { domainify } from '$lib/fetch-hnpwa';
+	import { resolve } from '$app/paths';
 	import 'open-props/style';
 	import dayjs from 'dayjs';
 
@@ -14,10 +15,43 @@
 		item.user ? `https://news.ycombinator.com/user?id=${item.user}` : null
 	);
 
+	// External URL for the posted article (not HN self-links)
+	const articleUrl = $derived(item.url && !item.url.startsWith('item?id=') ? item.url : hnItemUrl);
+
 	// HNPWA comment-type items have url like "item?id=NNNNN"
 	const parentStoryId = $derived(
 		item.type === 'comment' && item.url ? item.url.match(/item\?id=(\d+)/)?.[1] : null
 	);
+
+	// Extract path portion of URL for display (after domain)
+	const urlPath = $derived(
+		item.url && !item.url.startsWith('item?id=')
+			? item.url
+					.replace(/^https?:\/\/(www\.)?/, '')
+					.replace(domain || '', '')
+					.replace(/\/$/, '')
+			: ''
+	);
+
+	function goBack() {
+		// If opened in a new tab, history.length is typically 1-2 (browser-dependent).
+		// navigation.canGoBack is the most reliable check where available.
+		const nav = (window as any).navigation;
+		if (nav && typeof nav.canGoBack === 'boolean') {
+			if (nav.canGoBack) {
+				history.back();
+			} else {
+				window.location.href = resolve('/');
+			}
+		} else {
+			// Fallback: if we have meaningful history, go back; otherwise go home
+			if (history.length > 2) {
+				history.back();
+			} else {
+				window.location.href = resolve('/');
+			}
+		}
+	}
 
 	function relativeTime(time: number): string {
 		const timestamp = time < 1e12 ? time * 1000 : time;
@@ -40,6 +74,24 @@
 		return `${years}y`;
 	}
 </script>
+
+{#snippet upvote()}
+	<svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24">
+		<path
+			fill="currentColor"
+			d="M4 14h4v7a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1v-7h4a1.001 1.001 0 0 0 .781-1.625l-8-10c-.381-.475-1.181-.475-1.562 0l-8 10A1.001 1.001 0 0 0 4 14"
+		/>
+	</svg>
+{/snippet}
+
+{#snippet message()}
+	<svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24">
+		<path
+			fill="currentColor"
+			d="M20 2H4c-1.103 0-2 .894-2 1.992v12.016C2 17.106 2.897 18 4 18h3v4l6.351-4H20c1.103 0 2-.894 2-1.992V3.992A2 2 0 0 0 20 2"
+		/>
+	</svg>
+{/snippet}
 
 {#snippet commentTree(comments: HnpwaItem[], depth: number)}
 	{#each comments as comment (comment.id)}
@@ -71,39 +123,56 @@
 	{/each}
 {/snippet}
 
+<svelte:head>
+	<title>{item.title || 'HN Reader'}</title>
+</svelte:head>
+
 <main>
 	<d-header>
 		<d-nav>
-			<button type="button" class="back-btn" onclick={() => history.back()}> ← Back </button>
+			<button type="button" class="back-btn" onclick={goBack}> ← Back </button>
 		</d-nav>
 
 		<d-item-header>
 			{#if item.title}
 				<d-title>
-					{#if item.url && !item.url.startsWith('item?id=')}
-						<a href={item.url} class="title-link">{item.title}</a>
-					{:else}
-						<a href={hnItemUrl} class="title-link">{item.title}</a>
-					{/if}
+					<a href={articleUrl} class="title-link">{item.title}</a>
 				</d-title>
 				{#if domain}
-					<d-domain>({domain})</d-domain>
+					<d-url-row>
+						<a href={articleUrl} class="url-link">
+							{domain}<s-path>{urlPath}</s-path>
+						</a>
+					</d-url-row>
 				{/if}
 			{/if}
 
 			<d-metadata>
-				{#if item.points !== null}
-					<s-points>{item.points} point{item.points === 1 ? '' : 's'}</s-points>
-				{/if}
-				{#if item.user}
-					<span>by</span>
-					<a href={hnUserUrl} class="meta-link">{item.user}</a>
-				{/if}
+				<s-comments
+					class:high={item.comments_count >= 100}
+					class:mid={item.comments_count >= 50 && item.comments_count < 100}
+				>
+					<a href={hnItemUrl} class="meta-link">
+						{item.comments_count}
+						{@render message()}
+					</a>
+				</s-comments>
+				<s-points
+					class:high={(item.points ?? 0) >= 100}
+					class:mid={(item.points ?? 0) >= 50 && (item.points ?? 0) < 100}
+				>
+					{item.points ?? 0}
+					{@render upvote()}
+				</s-points>
 				<s-time>{relativeTime(item.time)}</s-time>
-				<span>|</span>
-				<a href={hnItemUrl} class="meta-link">
-					{item.comments_count} comment{item.comments_count === 1 ? '' : 's'}
-				</a>
+				{#if item.user}
+					<s-user>
+						by <a href={hnUserUrl} class="meta-link">{item.user}</a>
+					</s-user>
+				{/if}
+				<s-hn-link>
+					<a href={hnItemUrl} class="hn-link">news.ycombinator.com/item?id={item.id}</a>
+				</s-hn-link>
 			</d-metadata>
 
 			{#if parentStoryId}
@@ -131,6 +200,7 @@
 
 <style>
 	main {
+		width: 100%;
 		max-width: 42.875em;
 		margin: 0 auto;
 	}
@@ -168,15 +238,13 @@
 
 	d-item-header {
 		display: block;
-		padding: var(--size-3) var(--size-2);
+		padding: var(--size-2) var(--size-2) var(--size-2);
 	}
 
 	d-title {
 		display: block;
-		font-weight: var(--font-weight-6);
-		font-size: var(--font-size-3);
-		line-height: 1.3;
-		margin-bottom: var(--size-1);
+		font-weight: var(--font-weight-4);
+		line-height: 1.2;
 	}
 
 	.title-link {
@@ -192,32 +260,161 @@
 		}
 	}
 
-	d-domain {
+	d-url-row {
 		display: block;
-		font-size: var(--font-size-1);
-		color: light-dark(#888, #777);
-		margin-bottom: var(--size-2);
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		padding-bottom: var(--size-1);
+	}
+
+	.url-link {
+		color: var(--url-color);
+		font-size: 15px;
+		font-weight: var(--font-weight-4);
+		text-decoration: none;
+
+		&:visited {
+			color: var(--url-visited-color);
+		}
+
+		&:hover {
+			color: var(--url-hover-color);
+			text-decoration: underline;
+		}
+
+		&:hover s-path {
+			opacity: 1;
+		}
+	}
+
+	s-path {
+		opacity: 0.6;
 	}
 
 	d-metadata {
 		display: flex;
-		flex-wrap: wrap;
-		gap: 0.4ch;
-		font-size: var(--font-size-1);
-		color: light-dark(#666, #999);
-		align-items: baseline;
+		gap: 0.5ch;
+		font-size: 15px;
+		font-weight: var(--font-weight-2);
+		color: light-dark(#222222, #e5e5e5);
+		align-items: center;
+	}
+
+	s-comments {
+		display: flex;
+		gap: 0.25ch;
+		width: 6.25ch;
+		flex-shrink: 0;
+		font-variant-numeric: tabular-nums;
+		text-align: right;
+		white-space: nowrap;
+		align-items: center;
+		justify-content: flex-end;
+
+		svg {
+			width: 1em;
+			height: 1em;
+			flex-shrink: 0;
+			opacity: 0.2;
+		}
+
+		&.mid {
+			svg {
+				color: #ff6600;
+				opacity: 0.8;
+			}
+		}
+
+		&.high {
+			color: #ff6600;
+			font-weight: var(--font-weight-4);
+
+			svg {
+				opacity: 1;
+			}
+		}
 	}
 
 	s-points {
-		font-weight: var(--font-weight-4);
+		display: flex;
+		gap: 0.25ch;
+		width: 5.25ch;
+		flex-shrink: 0;
+		font-variant-numeric: tabular-nums;
+		text-align: right;
+		white-space: nowrap;
+		align-items: center;
+		justify-content: flex-end;
+
+		svg {
+			width: 1em;
+			height: 1em;
+			flex-shrink: 0;
+			opacity: 0.2;
+		}
+
+		&.mid {
+			svg {
+				color: #ff6600;
+				opacity: 0.8;
+			}
+		}
+
+		&.high {
+			color: #ff6600;
+			font-weight: var(--font-weight-4);
+
+			svg {
+				opacity: 1;
+			}
+		}
 	}
 
 	d-metadata s-time {
+		width: 4ch;
+		flex-shrink: 0;
 		font-variant-numeric: tabular-nums;
+		text-align: right;
+		white-space: nowrap;
+	}
+
+	s-user {
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
 	}
 
 	.meta-link {
 		color: light-dark(#666, #999);
+		text-decoration: none;
+
+		&:hover {
+			color: #ff6600;
+			text-decoration: underline;
+		}
+	}
+
+	s-comments .meta-link {
+		display: flex;
+		gap: 0.25ch;
+		align-items: center;
+		color: inherit;
+	}
+
+	s-hn-link {
+		min-width: 0;
+		margin-left: auto;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.hn-link {
+		color: light-dark(#999, #666);
+		font-weight: var(--font-weight-2);
 		text-decoration: none;
 
 		&:hover {
@@ -396,5 +593,11 @@
 		text-align: center;
 		color: light-dark(#888, #777);
 		font-size: var(--font-size-1);
+	}
+
+	:root {
+		--url-color: light-dark(#0645ad, #4da3ff);
+		--url-visited-color: light-dark(#0b0080, #9370db);
+		--url-hover-color: light-dark(#0645ad, #6db3ff);
 	}
 </style>
