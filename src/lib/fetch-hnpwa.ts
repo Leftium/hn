@@ -28,7 +28,7 @@ export async function fetchHnpwaItem(
 	id: number,
 	fetchFn: typeof fetch = fetch
 ): Promise<HnpwaItem> {
-	const response = await fetchFn(`${HNPWA_API_BASE}/item/${id}.json`);
+	const response = await fetchFn(`${HNPWA_API_BASE}/item/${id}.json?_=${Date.now()}`);
 
 	if (!response.ok) {
 		throw new Error(`HNPWA API error: ${response.status} ${response.statusText}`);
