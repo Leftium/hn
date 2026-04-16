@@ -129,36 +129,30 @@ Strict depth-first pre-order traversal of the original tree. LOD state affects o
 
 Each comment renders as an independent row, indented by level. A comment's LOD is **independent of its ancestors' LOD** — an L child under an S parent still renders as a full row at its own level. This may occasionally produce visually orphaned comments (L child with no visible parent context) but is rare in practice and keeps the rendering model trivial: traverse, render each node per its own LOD, done.
 
-### Row layout (meta below body)
+### Row layout
 
-Within each L or M row, the metadata strip (level badge, author, time, OP/NEW badges, LOD toggle buttons) renders **below** the comment body, not above. Rationale: after reading a comment the user's eye lands near the bottom of the row, so placing interaction controls there shortens travel distance for the most common action (toggling LOD). S rows have no body; meta (if shown) stays in its natural position.
+**L rows — meta below body.** The metadata strip (level badge, author, time, OP/NEW badges, LOD toggle buttons) renders **below** the comment body. Rationale: after reading a multi-line comment the user's eye lands near the bottom of the row, so placing interaction controls there shortens travel distance to the most common action (toggling LOD).
+
+**M rows — single line, meta first.** Because M is a single truncated line, the body cannot share vertical space with a separate meta row without doubling row height. Instead, M renders meta **first** on the line (level badge, author, time, badges, LOD toggle buttons), then the body, which flex-grows and ellipsis-truncates to fill remaining space. This matches familiar folded-comment conventions (author/time prefix + preview text) and lets the eye scan meta columns consistently across runs of M rows.
+
+**S rows — no body.** Solo S rows (grouping disabled) or strips have no body; meta is not shown (the colored block IS the row).
 
 ### S-grouping rule
 
-Consecutive S-state rows at the same level and adjacent in render order (strict depth-first pre-order) collapse into a single horizontal strip. Any non-S row, or any S row at a different level, interrupts the strip — even if that interrupting row is a descendant of a prior S sibling rather than a sibling itself. In other words, grouping operates on the rendered sequence, not on the tree-sibling relationship.
+Consecutive S-state rows adjacent in render order (strict depth-first pre-order) collapse into a single horizontal strip, regardless of level. Any non-S row interrupts the strip. Tree order is always preserved.
 
 Example render sequence:
 
 ```
 [L] comment A (level 1)
-░░░░░░░░░   ← strip (3 S-comments at level 1, adjacent in render order)
+▌▌▌▌   ← strip (4 S-comments of mixed levels, adjacent in render order)
 [M] comment B (level 1, single-line, ellipsis)
-░░░░░░      ← new strip (2 S-comments at level 1)
+▌▌     ← new strip (2 S-comments; first non-S row above broke the prior strip)
 ```
 
-Counter-example (strip broken by descendant):
+### S strip segment appearance
 
-```
-[S] comment A (level 1)
-  [L] comment A.1 (level 2) ← interrupts the level-1 strip
-[S] comment B (level 1) ← starts a new strip
-```
-
-Tree order is always preserved.
-
-### S strip color
-
-Single color per strip — the color associated with the strip's shared level (same level-color scheme as indentation).
+Each segment is a narrow colored block. Width and color are determined by the segment's own level — same palette as the left accent bar of L/M rows at that level, and a width scaled to level (matching `--bar-width`). This means a strip of mixed-level S comments renders as a row of varying-width, varying-color blocks, each visually encoding its depth. Strips pack segments left-to-right with a small gap; the strip's left indent matches the shallowest member's natural indent.
 
 ### S-grouping toggle (dev/debug)
 
@@ -260,7 +254,7 @@ Bind actions to click / toolbar buttons. Replace dev UI with production UX.
 
 ## Invariants
 
-1. **Order stability**: rendered row order = depth-first pre-order of original tree. No LOD operation reorders rows. (Intra-row layout, e.g. meta-below-body, is not part of this invariant.)
+1. **Order stability**: rendered row order = depth-first pre-order of original tree. No LOD operation reorders rows. (Intra-row layout — meta-below-body for L, meta-first-single-line for M — is not part of this invariant.)
 2. **Single state per node**: every comment resolves to exactly one of `L|M|S`.
 3. **Post renders as header, not comment**: the post's LOD entry in `lodState` is never read; the renderer uses a dedicated path. `setLOD` may write to the post id without effect.
 4. **Pure selectors**: selector functions are pure — no mutation, no reactive side effects.
