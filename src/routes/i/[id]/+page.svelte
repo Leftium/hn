@@ -10,6 +10,7 @@
 	} from '$lib/item-view-history';
 	import { resolve } from '$app/paths';
 	import { onMount } from 'svelte';
+	import { SvelteMap } from 'svelte/reactivity';
 	import 'open-props/style';
 	import dayjs from 'dayjs';
 
@@ -34,6 +35,50 @@
 
 	// Derive comment count from tree walk (HNPWA's comments_count inflates by including deleted/dead)
 	const visibleCommentCount = $derived(countVisibleComments(item.comments));
+
+	// --- LOD (Level of Detail) state ---
+	// Single source of truth for per-comment render state. Missing key ⇒ default 'L'.
+	// Post id may be written freely; the renderer never reads the post's entry.
+	// SvelteMap so per-id mutations (setLOD in Phase 3) trigger fine-grained rerenders.
+	const lodState = new SvelteMap<number, 'L' | 'M' | 'S'>();
+
+	function getLOD(id: number): 'L' | 'M' | 'S' {
+		return lodState.get(id) ?? 'L';
+	}
+
+	// Tree index: derived from item.comments + item.id. Rebuilt when the item changes.
+	// Selectors and default-state init read from this index; they never walk the raw tree.
+	// "Visible" matches isHiddenComment() — the index reflects exactly what the renderer draws.
+	interface TreeIndex {
+		parentOf: Map<number, number>; // comment id → parent id (post id for top-level)
+		childrenOf: Map<number, number[]>; // comment/post id → visible child ids in tree order
+		levelOf: Map<number, number>; // post → 0, top-level → 1, etc.
+		allIds: number[]; // every visible comment id in depth-first pre-order (excludes post)
+	}
+
+	const treeIndex = $derived.by<TreeIndex>(() => {
+		const parentOf = new Map<number, number>();
+		const childrenOf = new Map<number, number[]>();
+		const levelOf = new Map<number, number>([[item.id, 0]]);
+		const allIds: number[] = [];
+
+		function walk(comments: HnpwaItem[], parentId: number, level: number) {
+			const visible = comments.filter((c) => !isHiddenComment(c));
+			childrenOf.set(
+				parentId,
+				visible.map((c) => c.id)
+			);
+			for (const c of visible) {
+				parentOf.set(c.id, parentId);
+				levelOf.set(c.id, level);
+				allIds.push(c.id);
+				if (c.comments.length > 0) walk(c.comments, c.id, level + 1);
+			}
+		}
+		walk(item.comments, item.id, 1);
+
+		return { parentOf, childrenOf, levelOf, allIds };
+	});
 
 	// New-comment tracking: threshold is the viewedAt from the previous visit.
 	// null = first visit (no highlights). Set on mount from IndexedDB.
@@ -154,6 +199,8 @@
 			class:deleted={isDeleted && !isDead}
 			class:dead={isDead}
 			class:new-comment={isNew}
+			data-lod={getLOD(comment.id)}
+			data-level={treeIndex.levelOf.get(comment.id)}
 		>
 			<d-comment-meta>
 				{#if depth > 0}
