@@ -96,36 +96,58 @@
 		return out;
 	}
 
-	/** Toggle collapsed state: expand self (if collapsed) + direct children, or collapse entire subtree */
-	function toggleComment(comment: HnpwaItem) {
+	/** Toggle collapsed state. Returns set of comment IDs whose collapsed state changed. */
+	function toggleComment(comment: HnpwaItem): Set<number> {
 		const selfCollapsed = collapsedIds.has(comment.id);
 		const childIds = comment.comments.filter((c) => !isHiddenComment(c)).map((c) => c.id);
+		const changed = new Set<number>();
 
 		const next = new Set(collapsedIds);
 
 		if (selfCollapsed) {
 			// Expand self + all ancestors + expand direct children
-			next.delete(comment.id);
+			if (next.delete(comment.id)) changed.add(comment.id);
 			let ancestorId = parentMap.get(comment.id);
 			while (ancestorId !== undefined) {
-				next.delete(ancestorId);
+				if (next.delete(ancestorId)) changed.add(ancestorId);
 				ancestorId = parentMap.get(ancestorId);
 			}
-			for (const id of childIds) next.delete(id);
+			for (const id of childIds) {
+				if (next.delete(id)) changed.add(id);
+			}
+		} else if (childIds.length === 0) {
+			// Expanded leaf: collapse self + all ancestors at depth >= 1
+			if (!next.has(comment.id)) changed.add(comment.id);
+			next.add(comment.id);
+			let ancestorId = parentMap.get(comment.id);
+			while (ancestorId !== undefined) {
+				// Stop before depth-0 (depth-0 comments have no parent in parentMap)
+				const isDepthZero = !parentMap.has(ancestorId);
+				if (isDepthZero) break;
+				if (!next.has(ancestorId)) changed.add(ancestorId);
+				next.add(ancestorId);
+				ancestorId = parentMap.get(ancestorId);
+			}
 		} else {
-			// Already expanded: toggle children
+			// Already expanded with children: toggle children
 			const anyChildCollapsed = childIds.some((id) => next.has(id));
 			if (anyChildCollapsed) {
 				// Some children collapsed → expand all direct children
-				for (const id of childIds) next.delete(id);
+				for (const id of childIds) {
+					if (next.delete(id)) changed.add(id);
+				}
 			} else {
 				// All children expanded → collapse entire subtree
 				const allDescendants = collectDescendantIds(comment.comments, []);
-				for (const id of allDescendants) next.add(id);
+				for (const id of allDescendants) {
+					if (!next.has(id)) changed.add(id);
+					next.add(id);
+				}
 			}
 		}
 
 		collapsedIds = next;
+		return changed;
 	}
 
 	onMount(async () => {
@@ -251,19 +273,60 @@
 			onclick={async (e: MouseEvent) => {
 				// Don't toggle when clicking links
 				if ((e.target as HTMLElement).closest('a')) return;
-				// Capture position before DOM changes
-				const el = document.querySelector(`[data-comment-id="${comment.id}"]`);
-				const rectBefore = el?.getBoundingClientRect();
-				toggleComment(comment);
-				// Wait for Svelte DOM flush
+				const el = document.querySelector(
+					`[data-comment-id="${comment.id}"]`
+				) as HTMLElement | null;
+				if (!el) return;
+
+				// Capture heights of all comments that will change
+				const heightsBefore = new Map<number, number>();
+				// We don't know which IDs yet, so snapshot all visible comments
+				const allCommentEls = document.querySelectorAll<HTMLElement>('d-comment[data-comment-id]');
+				for (const cel of allCommentEls) {
+					const id = Number(cel.dataset.commentId);
+					heightsBefore.set(id, cel.offsetHeight);
+				}
+
+				// Capture clicked comment position for scroll anchoring
+				const rectBefore = el.getBoundingClientRect();
+
+				const changed = toggleComment(comment);
 				await tick();
-				if (!el || !rectBefore) return;
-				// Restore scroll position so comment stays in place
+
+				// Scroll anchoring — keep clicked comment in place
 				const rectAfter = el.getBoundingClientRect();
 				const shift = rectAfter.top - rectBefore.top;
 				if (Math.abs(shift) > 1) {
 					window.scrollBy(0, shift);
 				}
+
+				// Animate all changed comments
+				for (const id of changed) {
+					const cel = document.querySelector<HTMLElement>(`[data-comment-id="${id}"]`);
+					if (!cel) continue;
+					const hBefore = heightsBefore.get(id);
+					const hAfter = cel.offsetHeight;
+					if (hBefore === undefined || hBefore === hAfter) continue;
+
+					cel.style.overflow = 'hidden';
+					cel.style.height = `${hBefore}px`;
+					cel.style.transitionProperty = 'none';
+					void cel.offsetHeight;
+					cel.style.transitionProperty = 'height';
+					cel.style.transitionDuration = '350ms';
+					cel.style.transitionTimingFunction = 'ease-out';
+					cel.style.height = `${hAfter}px`;
+					const onEnd = () => {
+						cel.style.height = '';
+						cel.style.overflow = '';
+						cel.style.transitionProperty = '';
+						cel.style.transitionDuration = '';
+						cel.style.transitionTimingFunction = '';
+					};
+					cel.addEventListener('transitionend', onEnd, { once: true });
+					setTimeout(onEnd, 400);
+				}
+
 				el.classList.add('just-clicked');
 				setTimeout(() => el.classList.remove('just-clicked'), 1200);
 			}}
@@ -720,12 +783,15 @@
 
 		&:global(.just-clicked) {
 			background: light-dark(rgba(74, 158, 218, 0.12), rgba(74, 158, 218, 0.15)) !important;
-			transition: background 0s;
+			transition-property: background;
+			transition-duration: 0s;
 		}
 
 		/* Fade out after class is removed */
 		&:not(:global(.just-clicked)) {
-			transition: background 0.8s ease-out;
+			transition-property: background;
+			transition-duration: 0.8s;
+			transition-timing-function: ease-out;
 		}
 
 		&.collapsed {
