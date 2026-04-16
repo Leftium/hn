@@ -461,26 +461,57 @@
 {/snippet}
 
 {#snippet stripRow(strip: StripItem)}
-	{@const indent = Math.min(strip.minLevel - 1, MAX_INDENT)}
-	<d-comment-strip
-		style:--indent={indent}
-		data-min-level={strip.minLevel}
-		data-strip-size={strip.segments.length}
-	>
-		{#each strip.segments as seg (seg.id)}
-			{@const segColor = LEVEL_COLORS[(seg.level - 1) % LEVEL_COLORS.length]}
-			{@const segWidth = seg.level === 1 ? 3 : Math.min(1 + seg.level, 14)}
+	<d-comment-strip data-min-level={strip.minLevel} data-strip-size={strip.segments.length}>
+		<d-strip-segs>
+			{#each strip.segments as seg (seg.id)}
+				{@const segColor = LEVEL_COLORS[(seg.level - 1) % LEVEL_COLORS.length]}
+				{@const segWidth = seg.level === 1 ? 3 : Math.min(1 + seg.level, 14)}
+				<button
+					type="button"
+					class="strip-seg"
+					style:--seg-color={segColor}
+					style:--seg-width="{segWidth}px"
+					data-seg-level={seg.level}
+					aria-label="cycle LOD for comment {seg.id} (level {seg.level})"
+					title="level {seg.level} — cycle LOD for #{seg.id}"
+					onclick={() => toggleLOD(seg.id)}
+				></button>
+			{/each}
+		</d-strip-segs>
+		<!-- Dev UI (Phase 3): bulk LOD toggle for all strip members. -->
+		<s-lod-dev>
 			<button
 				type="button"
-				class="strip-seg"
-				style:--seg-color={segColor}
-				style:--seg-width="{segWidth}px"
-				data-seg-level={seg.level}
-				aria-label="cycle LOD for comment {seg.id} (level {seg.level})"
-				title="level {seg.level} — cycle LOD for #{seg.id}"
-				onclick={() => toggleLOD(seg.id)}
-			></button>
-		{/each}
+				class="lod-btn"
+				aria-label="set all strip members to L"
+				onclick={() =>
+					setLOD(
+						strip.segments.map((s) => s.id),
+						'L'
+					)}>L</button
+			><button
+				type="button"
+				class="lod-btn"
+				aria-label="set all strip members to M"
+				onclick={() =>
+					setLOD(
+						strip.segments.map((s) => s.id),
+						'M'
+					)}>M</button
+			><button
+				type="button"
+				class="lod-btn active"
+				aria-label="all strip members are S"
+				title="active (all members already S)">S</button
+			><button
+				type="button"
+				class="lod-btn cycle"
+				aria-label="cycle LOD for all strip members"
+				onclick={() => {
+					for (const s of strip.segments) toggleLOD(s.id);
+				}}>↻</button
+			>
+		</s-lod-dev>
 	</d-comment-strip>
 {/snippet}
 
@@ -1144,16 +1175,25 @@
 	/* --- S render mode (grouped strip) ---
 	   A horizontal row of narrow, non-filling clickable segments. Each
 	   segment's width and color encode its own level (matching the left
-	   accent bar of L/M rows at that level). The strip anchors its left
-	   edge to the shallowest member's natural indent. */
+	   accent bar of L/M rows at that level). Strip is flush-left (no indent)
+	   so segment widths read as a pure level profile of the compressed run.
+	   Right side: bulk dev-UI buttons for setting all members at once. */
 	d-comment-strip {
+		display: flex;
+		gap: var(--size-2);
+		align-items: center;
+		padding: var(--size-1) var(--size-2) var(--size-1) 0;
+		background: light-dark(#ffffff, #262626);
+		border-top: 1px solid light-dark(#e6e6df, #3a3a3a);
+	}
+
+	d-strip-segs {
 		display: flex;
 		gap: 2px;
 		align-items: center;
-		padding: var(--size-1) var(--size-2) var(--size-1)
-			calc(var(--size-3) * var(--indent, 0) + var(--size-2));
-		background: light-dark(#ffffff, #262626);
-		border-top: 1px solid light-dark(#e6e6df, #3a3a3a);
+		flex: 1 1 auto;
+		min-width: 0;
+		flex-wrap: wrap;
 	}
 
 	button.strip-seg {
