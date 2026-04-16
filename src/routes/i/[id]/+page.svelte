@@ -151,6 +151,25 @@
 		return treeIndex.allIds;
 	}
 
+	// --- Phase 4: default initial LOD state by level ---
+	// Runs on mount and whenever item.id changes (story navigation). Resets any
+	// prior entries so manual cycling from a previous story doesn't leak across.
+	// Single walk: bucket by level, apply M to level 2, S to level ≥ 3.
+	// Level 1 is left implicit (default L). Empty trees no-op cleanly.
+	$effect(() => {
+		void item.id; // track item changes
+		lodState.clear();
+		const M: number[] = [];
+		const S: number[] = [];
+		for (const id of treeIndex.allIds) {
+			const lv = treeIndex.levelOf.get(id) ?? 0;
+			if (lv === 2) M.push(id);
+			else if (lv >= 3) S.push(id);
+		}
+		setLOD(M, 'M');
+		setLOD(S, 'S');
+	});
+
 	// --- S-grouping toggle (dev) ---
 	// Default true; disable with ?group=0 in the URL to render each S row
 	// individually (no horizontal merging). See spec §Rendering > S-grouping toggle.
