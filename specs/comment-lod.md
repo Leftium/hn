@@ -127,24 +127,50 @@ No custom wrappers for `union`/`intersection` — use native Set methods directl
 
 Strict depth-first pre-order traversal of the original tree. LOD state affects only _how_ each node renders, never _whether_ or _where_.
 
-Each comment renders as an independent row, indented by depth. A comment's LOD is **independent of its ancestors' LOD** — an L child under an S parent still renders as a full row at its own depth. This may occasionally produce visually orphaned comments (L child with no visible parent context) but is rare in practice and keeps the rendering model trivial: traverse, render each node per its own LOD, done.
+Each comment renders as an independent row, indented by level. A comment's LOD is **independent of its ancestors' LOD** — an L child under an S parent still renders as a full row at its own level. This may occasionally produce visually orphaned comments (L child with no visible parent context) but is rare in practice and keeps the rendering model trivial: traverse, render each node per its own LOD, done.
+
+### Row layout (meta below body)
+
+Within each L or M row, the metadata strip (level badge, author, time, OP/NEW badges, LOD toggle buttons) renders **below** the comment body, not above. Rationale: after reading a comment the user's eye lands near the bottom of the row, so placing interaction controls there shortens travel distance for the most common action (toggling LOD). S rows have no body; meta (if shown) stays in its natural position.
 
 ### S-grouping rule
 
-When traversing siblings, consecutive S-state comments at the same depth collapse into a single horizontal strip. An M or L comment interrupts the strip. Example siblings:
+Consecutive S-state rows at the same level and adjacent in render order (strict depth-first pre-order) collapse into a single horizontal strip. Any non-S row, or any S row at a different level, interrupts the strip — even if that interrupting row is a descendant of a prior S sibling rather than a sibling itself. In other words, grouping operates on the rendered sequence, not on the tree-sibling relationship.
+
+Example render sequence:
 
 ```
-[L] comment A
-░░░░░░░░░   ← grouped strip (3 S-comments at same depth)
-[M] comment B (single-line, ellipsis)
-░░░░░░      ← new grouped strip (2 S-comments)
+[L] comment A (level 1)
+░░░░░░░░░   ← strip (3 S-comments at level 1, adjacent in render order)
+[M] comment B (level 1, single-line, ellipsis)
+░░░░░░      ← new strip (2 S-comments at level 1)
 ```
 
-Grouping never crosses depth boundaries or non-sibling gaps. Tree order is preserved.
+Counter-example (strip broken by descendant):
+
+```
+[S] comment A (level 1)
+  [L] comment A.1 (level 2) ← interrupts the level-1 strip
+[S] comment B (level 1) ← starts a new strip
+```
+
+Tree order is always preserved.
 
 ### S strip color
 
-Single color per strip — the color associated with the strip's shared depth (same depth-color scheme as indentation).
+Single color per strip — the color associated with the strip's shared level (same level-color scheme as indentation).
+
+### S-grouping toggle (dev/debug)
+
+A module-level flag `sGroupingEnabled` (default `true`) controls whether adjacent same-level S rows merge into a strip. When `false`, every S comment renders as its own row showing a small colored block where the body would be, with no horizontal merging.
+
+Toggleable via URL query parameter `?group=0` for a session. Useful during development to:
+
+- Verify each S row has independent click-to-cycle behavior (1 row = 1 id)
+- Cross-check `lodState` entries per id without the strip abstraction
+- Inspect strict pre-order rendering directly
+
+Production default is `true`; the flag is not exposed in production UI.
 
 ### Post rendering
 
@@ -178,12 +204,15 @@ Rationale: the legacy logic was ~700 lines entangled across state, template, and
 - Implement `setLOD`, `toggleLOD`
 - Implement all selectors: `self`, `ancestorsOf`, `parentOf`, `childrenOf`, `descendantsOf`, `subtreeOf`, `siblingsOf`, `allComments`
 - Add M and S render modes (single-line truncated; colored block)
-- Implement S-grouping of consecutive same-depth siblings
+- Implement S-grouping of adjacent same-level rows (strict pre-order)
+- Add `sGroupingEnabled` flag + `?group=0` URL override (dev/debug toggle)
+- Move comment metadata row below the comment body (layout change)
 - **Dev UI**: four buttons per comment — `[L] [M] [S] [cycle]`
   - `[L]`, `[M]`, `[S]` call `toggleLOD(id, <level>)` directly
   - `[cycle]` calls `toggleLOD(id)` with no override (cycles L→M→S→L)
   - Current LOD visually indicated (active button highlighted)
-- Manual testing: all transitions work, order stable, S-grouping visible
+  - Buttons appear at the end of the meta row (which now sits below the body)
+- Manual testing: all transitions work, order stable, S-grouping visible, `?group=0` unmerges strips
 
 ### Phase 4: Default initial state
 
@@ -231,7 +260,7 @@ Bind actions to click / toolbar buttons. Replace dev UI with production UX.
 
 ## Invariants
 
-1. **Order stability**: rendered order = depth-first pre-order of original tree. No LOD operation reorders.
+1. **Order stability**: rendered row order = depth-first pre-order of original tree. No LOD operation reorders rows. (Intra-row layout, e.g. meta-below-body, is not part of this invariant.)
 2. **Single state per node**: every comment resolves to exactly one of `L|M|S`.
 3. **Post renders as header, not comment**: the post's LOD entry in `lodState` is never read; the renderer uses a dedicated path. `setLOD` may write to the post id without effect.
 4. **Pure selectors**: selector functions are pure — no mutation, no reactive side effects.
@@ -241,7 +270,7 @@ Bind actions to click / toolbar buttons. Replace dev UI with production UX.
 ## Resolved design questions
 
 1. **S-descendants rendering**: each comment's LOD is independent. An L descendant under an S parent renders normally at its own depth. Orphaned-context cases are rare and acceptable.
-2. **S strip color**: single color per strip, matching the strip's depth color.
+2. **S strip color**: single color per strip, matching the strip's level color.
 3. **Keyboard navigation**: not in scope.
 4. **Persistence**: none. LOD state resets on page reload / navigation.
 
