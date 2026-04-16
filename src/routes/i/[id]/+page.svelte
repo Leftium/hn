@@ -1098,11 +1098,13 @@
 
 	/* --- M render mode: single-line, ellipsis-truncated body ---
 	   flex-row parent supplies horizontal packing; body flex-grows and
-	   min-width: 0 allows it to shrink so text-overflow: ellipsis engages. */
+	   min-width: 0 allows it to shrink so text-overflow: ellipsis engages.
+	   Smaller font matches the meta row and lets more preview text fit. */
 	d-comment[data-lod='M'] d-comment-body {
 		display: block;
 		flex: 1 1 0;
 		min-width: 0;
+		font-size: var(--font-size-0);
 		white-space: nowrap;
 		overflow: hidden;
 		text-overflow: ellipsis;
@@ -1115,8 +1117,22 @@
 		flex: 0 0 auto;
 	}
 
-	d-comment[data-lod='M'] s-lod-dev {
-		flex: 0 0 auto;
+	/* M dev UI is absolutely positioned so it takes no horizontal layout
+	   space — body ellipsis extends to the right padding edge. On hover
+	   the dev UI appears overlapping the tail of the body text, which is
+	   acceptable for a transient debug affordance. d-comment's overflow:
+	   hidden keeps the dev UI from escaping the row; it sits inside the
+	   existing right padding. Requires position: relative on the parent. */
+	d-comment[data-lod='M'] {
+		position: relative;
+	}
+
+	d-comment[data-lod='M'] > s-lod-dev {
+		position: absolute;
+		right: var(--size-2);
+		top: 50%;
+		transform: translateY(-50%);
+		flex: none;
 	}
 
 	d-comment[data-lod='M'] d-comment-body :global {
@@ -1191,7 +1207,7 @@
 		display: flex;
 		gap: var(--size-2);
 		align-items: stretch;
-		min-height: 0.875em;
+		min-height: 0.4375em;
 		padding: 0 var(--size-2) 0 0;
 		margin: 0;
 		background: light-dark(#ffffff, #262626);
