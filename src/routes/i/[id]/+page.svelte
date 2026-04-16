@@ -44,6 +44,11 @@
 	// Default: all depth > 0 comments start collapsed.
 	let collapsedIds = $state(new Set<number>());
 
+	// Micro-collapse state: Set of depth-1 comment IDs whose depth-2+ subtrees
+	// are rendered as a 2px color strip instead of individual collapsed lines.
+	// Default: all depth-1 comments that have depth-2+ descendants.
+	let microCollapsedIds = $state(new Set<number>());
+
 	// Parent map: child ID → parent ID (for ancestor expansion)
 	let parentMap = $state(new Map<number, number>());
 
@@ -53,22 +58,41 @@
 		depth: number,
 		parentId: number | null,
 		collapsed: Set<number>,
-		parents: Map<number, number>
+		parents: Map<number, number>,
+		microCollapsed: Set<number>
 	) {
 		for (const c of comments) {
 			if (depth > 0) collapsed.add(c.id);
 			if (parentId !== null) parents.set(c.id, parentId);
-			if (c.comments?.length) buildCommentMaps(c.comments, depth + 1, c.id, collapsed, parents);
+			// Depth-1 comments with any depth-2+ visible descendants get micro-collapsed
+			if (depth === 1 && hasVisibleChildren(c)) {
+				microCollapsed.add(c.id);
+			}
+			if (c.comments?.length)
+				buildCommentMaps(c.comments, depth + 1, c.id, collapsed, parents, microCollapsed);
 		}
 	}
 
-	// Re-initialize collapsed set and parent map whenever item changes
+	/** Check if a comment has any visible children */
+	function hasVisibleChildren(comment: HnpwaItem): boolean {
+		return comment.comments?.some((c) => !isHiddenComment(c)) ?? false;
+	}
+
+	/** Check if a comment is at depth 1 (parent exists but grandparent doesn't) */
+	function isDepthOne(id: number): boolean {
+		const parentId = parentMap.get(id);
+		return parentId !== undefined && !parentMap.has(parentId);
+	}
+
+	// Re-initialize collapsed set, parent map, and micro-collapsed set whenever item changes
 	$effect(() => {
 		const collapsed = new Set<number>();
 		const parents = new Map<number, number>();
-		buildCommentMaps(item.comments, 0, null, collapsed, parents);
+		const micro = new Set<number>();
+		buildCommentMaps(item.comments, 0, null, collapsed, parents, micro);
 		collapsedIds = collapsed;
 		parentMap = parents;
+		microCollapsedIds = micro;
 	});
 
 	/** Strip HTML tags and decode entities to plain text for collapsed preview */
@@ -84,6 +108,29 @@
 			.replace(/&apos;/g, "'")
 			.replace(/\s+/g, ' ')
 			.trim();
+	}
+
+	/** Collect descendant depths (visible only) from a comment subtree, in tree order */
+	function collectDescendantDepths(comments: HnpwaItem[], baseDepth: number, out: number[]) {
+		for (const c of comments) {
+			if (isHiddenComment(c)) continue;
+			out.push(baseDepth);
+			if (c.comments?.length) collectDescendantDepths(c.comments, baseDepth + 1, out);
+		}
+		return out;
+	}
+
+	/**
+	 * Build an array of color blocks for the micro-collapsed strip.
+	 * Each descendant gets a block colored by its depth.
+	 * Width matches the depth's left border width: Math.min(2 + depth, 14)px.
+	 */
+	function buildMicroBlocks(comments: HnpwaItem[]): Array<{ color: string; width: number }> {
+		const depths = collectDescendantDepths(comments, 2, []);
+		return depths.map((d) => ({
+			color: DEPTH_COLORS[d % DEPTH_COLORS.length],
+			width: Math.min(2 + d, 14)
+		}));
 	}
 
 	/** Collect all descendant IDs (visible only) from a comment subtree */
@@ -105,15 +152,18 @@
 		const next = new Set(collapsedIds);
 
 		if (selfCollapsed) {
-			// Expand self + all ancestors + expand direct children
+			// Expand self + all ancestors
 			if (next.delete(comment.id)) changed.add(comment.id);
 			let ancestorId = parentMap.get(comment.id);
 			while (ancestorId !== undefined) {
 				if (next.delete(ancestorId)) changed.add(ancestorId);
 				ancestorId = parentMap.get(ancestorId);
 			}
-			for (const id of childIds) {
-				if (next.delete(id)) changed.add(id);
+			// Expand direct children — but only if they're not behind a micro-collapsed strip
+			if (!microCollapsedIds.has(comment.id)) {
+				for (const id of childIds) {
+					if (next.delete(id)) changed.add(id);
+				}
 			}
 		} else if (childIds.length === 0) {
 			// Expanded leaf: collapse self + all ancestors at depth >= 1
@@ -142,6 +192,12 @@
 				for (const id of allDescendants) {
 					if (!next.has(id)) changed.add(id);
 					next.add(id);
+				}
+				// Re-engage micro-collapse for depth-1 comments with deep descendants
+				if (isDepthOne(comment.id) && hasVisibleChildren(comment)) {
+					const nextMicro = new Set(microCollapsedIds);
+					nextMicro.add(comment.id);
+					microCollapsedIds = nextMicro;
 				}
 			}
 		}
@@ -368,7 +424,42 @@
 			{/if}
 		</d-comment>
 		{#if comment.comments.length > 0}
-			{@render commentTree(comment.comments, depth + 1)}
+			{#if depth === 1 && microCollapsedIds.has(comment.id)}
+				{@const blocks = buildMicroBlocks(comment.comments)}
+				{#if blocks.length > 0}
+					<!-- svelte-ignore a11y_no_static_element_interactions -->
+					<d-micro-collapsed
+						data-micro-id={comment.id}
+						onclick={async (e: MouseEvent) => {
+							const stripEl = e.currentTarget as HTMLElement;
+							const parentEl = document.querySelector<HTMLElement>(
+								`[data-comment-id="${comment.id}"]`
+							);
+							const anchorEl = parentEl || stripEl;
+							const rectBefore = anchorEl.getBoundingClientRect();
+
+							const next = new Set(microCollapsedIds);
+							next.delete(comment.id);
+							microCollapsedIds = next;
+
+							await tick();
+
+							const rectAfter = anchorEl.getBoundingClientRect();
+							const shift = rectAfter.top - rectBefore.top;
+							if (Math.abs(shift) > 1) {
+								window.scrollBy(0, shift);
+							}
+						}}
+					>
+						{#each blocks as block}
+							<s-micro-block style:width="{block.width}px" style:background={block.color}
+							></s-micro-block>
+						{/each}
+					</d-micro-collapsed>
+				{/if}
+			{:else}
+				{@render commentTree(comment.comments, depth + 1)}
+			{/if}
 		{/if}
 	{/each}
 {/snippet}
@@ -743,19 +834,53 @@
 		display: block;
 	}
 
+	d-micro-collapsed {
+		display: flex;
+		height: 4px;
+		overflow: hidden;
+		cursor: pointer;
+		opacity: 0.7;
+		transition: opacity 0.15s ease;
+
+		&:hover {
+			opacity: 1;
+		}
+	}
+
+	s-micro-block {
+		display: block;
+		height: 100%;
+		flex-shrink: 0;
+	}
+
 	d-comment {
 		display: block;
+		position: relative;
 		padding: var(--size-2) var(--size-2) var(--size-2)
 			calc(var(--size-3) * var(--indent, 0) + var(--size-2));
-		border-top: 1px solid light-dark(#e6e6df, #3a3a3a);
-		border-left: var(--bar-width, 0px) solid
-			color-mix(in srgb, var(--depth-color, transparent) 70%, transparent);
 		background: light-dark(#ffffff, #262626);
 		overflow: hidden;
 
-		/* Top-level comments (depth 0) — no colored left border */
-		&.top-level {
-			border-left-color: transparent;
+		/* Depth accent bar — flush top and bottom */
+		&::before {
+			content: '';
+			position: absolute;
+			left: 0;
+			top: 0;
+			bottom: 0;
+			width: var(--bar-width, 0px);
+			background: color-mix(in srgb, var(--depth-color, transparent) 70%, transparent);
+		}
+
+		/* Separator line — starts after the accent bar */
+		&::after {
+			content: '';
+			position: absolute;
+			top: 0;
+			left: var(--bar-width, 0px);
+			right: 0;
+			height: 1px;
+			background: light-dark(#e6e6df, #3a3a3a);
 		}
 
 		&.deleted {
