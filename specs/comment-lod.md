@@ -1,6 +1,6 @@
 # Spec: Selective Comment LOD (Level of Detail) Rendering
 
-**Status:** Draft — reimplementation of comment toggling
+**Status:** Phases 1–4 complete; Phase 5 (production UX actions, dev-UI removal) pending
 **Replaces:** current `collapsedIds` / `microCollapsedIds` / `autoGroupedIds` / `threadChildIds` system in `src/routes/i/[id]/+page.svelte`
 
 ## Motivation
@@ -27,7 +27,7 @@ Goals:
 - **LOD** (Level of Detail): how a comment renders
   - **L** (Large): multiline, full text — default
   - **M** (Medium): single line, ellipsis-truncated
-  - **S** (Small): colored block only (level-indicating), consecutive S siblings at the same level group horizontally into a strip
+  - **S** (Small): colored block only (level-indicating); consecutive S rows in render order (regardless of level) group horizontally into a strip
 - **Render order**: strict depth-first pre-order traversal of the tree. LOD NEVER reorders.
 
 ## State model
@@ -133,7 +133,7 @@ Each comment renders as an independent row, indented by level. A comment's LOD i
 
 **L rows — meta below body.** The metadata strip (level badge, author, time, OP/NEW badges, LOD toggle buttons) renders **below** the comment body. Rationale: after reading a multi-line comment the user's eye lands near the bottom of the row, so placing interaction controls there shortens travel distance to the most common action (toggling LOD).
 
-**M rows — single line, meta first.** Because M is a single truncated line, the body cannot share vertical space with a separate meta row without doubling row height. Instead, M renders meta **first** on the line (level badge, author, time, badges, LOD toggle buttons), then the body, which flex-grows and ellipsis-truncates to fill remaining space. This matches familiar folded-comment conventions (author/time prefix + preview text) and lets the eye scan meta columns consistently across runs of M rows.
+**M rows — single line, meta first.** Because M is a single truncated line, the body cannot share vertical space with a separate meta row without doubling row height. Instead, M renders meta **first** on the line (level badge, author, time, badges), then the body, which flex-grows and ellipsis-truncates to fill remaining space. This matches familiar folded-comment conventions (author/time prefix + preview text) and lets the eye scan meta columns consistently across runs of M rows. The body uses a smaller font (`--font-size-0`, matching the meta row) so more preview text fits per line. Dev UI is absolutely positioned at the right edge and takes no horizontal layout space — body ellipsis extends to the padding edge.
 
 **S rows — no body.** Solo S rows (grouping disabled) or strips have no body; meta is not shown (the colored block IS the row).
 
@@ -152,7 +152,17 @@ Example render sequence:
 
 ### S strip segment appearance
 
-Each segment is a narrow colored block. Width and color are determined by the segment's own level — same palette as the left accent bar of L/M rows at that level, and a width scaled to level (matching `--bar-width`). This means a strip of mixed-level S comments renders as a row of varying-width, varying-color blocks, each visually encoding its depth. Strips pack segments left-to-right with a small gap. Strips are flush-left (no indent) so the segment-width profile reads as a pure compressed level sequence, uninterrupted by indentation whitespace.
+Each segment is a narrow clickable colored block. Width and color are determined by the segment's own level — same palette as the left accent bar of L/M rows at that level, and a width scaled to level (matching `--bar-width`). This means a strip of mixed-level S comments renders as a row of varying-width, varying-color blocks, each visually encoding its depth.
+
+Strip layout:
+
+- **Flush-left, no indent** — the segment-width profile reads as a pure compressed level sequence, uninterrupted by indentation whitespace.
+- **No gap between segments** — segments pack tightly. A 1px inset box-shadow on each segment's left edge (using the row-separator token `light-dark(#e6e6df, #3a3a3a)` at 50% alpha) acts as a hairline divider: nearly invisible between different-color segments, clearly visible between adjacent same-color segments.
+- **Square corners, full row height** — each segment stretches the strip's vertical extent with no radius, visually reading as a rightward extension of the left accent bar used on L/M rows.
+- **Short row** — the strip row is much shorter than L/M rows (roughly a quarter of a text-row height) so long S runs read as a compact band rather than taking meaningful vertical space.
+- **No wrapping** — `flex-wrap: nowrap` with `overflow: hidden` on the segment container. Segments that overflow the available width are clipped rather than wrapping to a second line.
+
+Solo S rows (a single S comment between non-S rows) render as a 1-segment strip rather than a distinct row type, sharing the strip's layout, styling, and bulk-action path. The only visual difference from a multi-segment strip is segment count. (The `?group=0` debug path is the exception — see below.)
 
 ### S-grouping toggle (dev/debug)
 
@@ -193,43 +203,49 @@ Rationale: the legacy logic was ~700 lines entangled across state, template, and
 - Render every comment as L (current full-render path)
 - Verify visually nothing regresses for a sample thread
 
-### Phase 3: Primitives + dev UI
+### Phase 3: Primitives + dev UI ✅
 
 - Implement `setLOD`, `toggleLOD`
 - Implement all selectors: `self`, `ancestorsOf`, `parentOf`, `childrenOf`, `descendantsOf`, `subtreeOf`, `siblingsOf`, `allComments`
 - Add M and S render modes (single-line truncated; colored block)
-- Implement S-grouping of adjacent same-level rows (strict pre-order)
+- Implement S-grouping of adjacent rows in render order (strict pre-order; level-agnostic)
 - Add `sGroupingEnabled` flag + `?group=0` URL override (dev/debug toggle)
-- Move comment metadata row below the comment body (layout change)
-- **Dev UI**: four buttons per comment — `[L] [M] [S] [cycle]`
+- Row layout per LOD (L meta-below-body; M meta-first single line; S strip)
+- **Per-row dev UI**: four buttons — `[L] [M] [S] [↻]`
   - `[L]`, `[M]`, `[S]` call `toggleLOD(id, <level>)` directly
-  - `[cycle]` calls `toggleLOD(id)` with no override (cycles L→M→S→L)
+  - `[↻]` calls `toggleLOD(id)` with no override (cycles L→M→S→L)
   - Current LOD visually indicated (active button highlighted)
-  - Buttons appear at the end of the meta row (which now sits below the body)
-- Manual testing: all transitions work, order stable, S-grouping visible, `?group=0` unmerges strips
+- **Per-strip dev UI**: same four buttons acting on all segments in the strip via `setLOD(strip.segments.map(s => s.id), level)`. `[S]` is always active (the strip's members are by definition S). `[↻]` cycles all members in lockstep.
+- **Visibility**: dev UI is `opacity: 0` by default and revealed on row hover (or `:focus-within`) so at most one row's controls are visible at a time. Under `@media (hover: none)` (touch devices) it's always visible — there's no way to reveal it otherwise. On M and strip rows the dev UI is `position: absolute` anchored to the right edge so it contributes zero horizontal layout space (body ellipsis extends to the edge) and zero vertical layout space (strip row stays short; dev UI overflows visually above/below the band when hovered).
+- Manual testing: all transitions work, order stable, S-grouping visible, `?group=0` unmerges strips and renders solo S via the `s-solo` commentRow path
 
-### Phase 4: Default initial state
+### Phase 4: Default initial state ✅
 
-On item load:
+On item load (and on navigation between items):
 
-- Level 1 comments → L
+- Level 1 comments → L (default, no explicit write)
 - Level 2 comments → M
 - Level ≥ 3 comments → S
 
+Implementation uses a `$effect` keyed on `item.id` that clears `lodState` then walks `treeIndex.allIds` once, assigning M/S by level. Story navigation resets all LOD to the level-derived defaults.
+
 ```ts
-setLOD(
-	allComments().filter((id) => levelOf(id) === 2),
-	'M'
-);
-setLOD(
-	allComments().filter((id) => levelOf(id) >= 3),
-	'S'
-);
+$effect(() => {
+	const _ = item.id; // track
+	lodState.clear();
+	const mIds: number[] = [];
+	const sIds: number[] = [];
+	for (const id of treeIndex.allIds) {
+		const level = treeIndex.levelOf.get(id) ?? 0;
+		if (level === 2) mIds.push(id);
+		else if (level >= 3) sIds.push(id);
+	}
+	setLOD(mIds, 'M');
+	setLOD(sIds, 'S');
+});
 ```
 
-Where `levelOf(id)` reads from the tree index. `allComments()` returns ids (not HnpwaItem objects) — all selectors deal in ids.
-
-Predicate filtering uses native `Array.prototype.filter` on selector output — no predicate API needed in the primitives layer.
+`allIds` from the tree index is preferred over the selector `allComments()` here because the effect runs before user interaction, avoiding an extra round-trip through the selector layer. Selectors remain the primary interface for Phase 5 actions.
 
 ### Phase 5: UX actions (built on primitives)
 
