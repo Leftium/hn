@@ -237,6 +237,103 @@
 		return changed;
 	}
 
+	/**
+	 * Snapshot all comment heights, run a state mutation, then animate
+	 * changed elements and scroll-anchor to keep `anchorEl` in place.
+	 */
+	async function animateStateChange(anchorEl: HTMLElement, mutate: () => void) {
+		// Snapshot heights before mutation
+		const heightsBefore = new Map<number, number>();
+		const allEls = document.querySelectorAll<HTMLElement>('d-comment[data-comment-id]');
+		for (const el of allEls) {
+			heightsBefore.set(Number(el.dataset.commentId), el.offsetHeight);
+		}
+		// Also snapshot micro-collapsed strips
+		const stripHeightsBefore = new Map<number, number>();
+		const allStrips = document.querySelectorAll<HTMLElement>('d-micro-collapsed[data-micro-id]');
+		for (const el of allStrips) {
+			stripHeightsBefore.set(Number(el.dataset.microId), el.offsetHeight);
+		}
+
+		const rectBefore = anchorEl.getBoundingClientRect();
+
+		mutate();
+		await tick();
+
+		// Scroll anchoring
+		const rectAfter = anchorEl.getBoundingClientRect();
+		const shift = rectAfter.top - rectBefore.top;
+		if (Math.abs(shift) > 1) {
+			window.scrollBy(0, shift);
+		}
+
+		// Track which before-comments disappeared (for strip animation)
+		const disappearedHeight = new Map<number, number>(); // parentId → total height lost
+		for (const [id, hBefore] of heightsBefore) {
+			const el = document.querySelector<HTMLElement>(`[data-comment-id="${id}"]`);
+			if (el) {
+				// Still exists — animate if height changed
+				const hAfter = el.offsetHeight;
+				if (hBefore !== hAfter) animateHeight(el, hBefore, hAfter);
+			} else {
+				// Disappeared — accumulate height under its parent for strip animation
+				const pid = parentMap.get(id);
+				if (pid !== undefined) {
+					disappearedHeight.set(pid, (disappearedHeight.get(pid) ?? 0) + hBefore);
+				}
+			}
+		}
+
+		// Animate strips that existed before and changed height
+		for (const [id, hBefore] of stripHeightsBefore) {
+			const el = document.querySelector<HTMLElement>(`[data-micro-id="${id}"]`);
+			if (!el) continue;
+			const hAfter = el.offsetHeight;
+			if (hBefore !== hAfter) animateHeight(el, hBefore, hAfter);
+		}
+
+		// Animate newly-appeared strips: start from total height of
+		// disappeared children so it looks like lines compress into strip
+		const allStripsAfter = document.querySelectorAll<HTMLElement>(
+			'd-micro-collapsed[data-micro-id]'
+		);
+		for (const el of allStripsAfter) {
+			const id = Number(el.dataset.microId);
+			if (stripHeightsBefore.has(id)) continue;
+			const lostHeight = disappearedHeight.get(id) ?? 0;
+			animateHeight(el, lostHeight || 0, el.offsetHeight);
+		}
+
+		// Animate newly-appeared comments
+		const allElsAfter = document.querySelectorAll<HTMLElement>('d-comment[data-comment-id]');
+		for (const el of allElsAfter) {
+			const id = Number(el.dataset.commentId);
+			if (heightsBefore.has(id)) continue;
+			animateHeight(el, 0, el.offsetHeight);
+		}
+	}
+
+	/** Animate an element's height from hBefore to hAfter */
+	function animateHeight(el: HTMLElement, hBefore: number, hAfter: number) {
+		el.style.overflow = 'hidden';
+		el.style.height = `${hBefore}px`;
+		el.style.transitionProperty = 'none';
+		void el.offsetHeight;
+		el.style.transitionProperty = 'height';
+		el.style.transitionDuration = '350ms';
+		el.style.transitionTimingFunction = 'ease-out';
+		el.style.height = `${hAfter}px`;
+		const onEnd = () => {
+			el.style.height = '';
+			el.style.overflow = '';
+			el.style.transitionProperty = '';
+			el.style.transitionDuration = '';
+			el.style.transitionTimingFunction = '';
+		};
+		el.addEventListener('transitionend', onEnd, { once: true });
+		setTimeout(onEnd, 400);
+	}
+
 	onMount(async () => {
 		const previous = await getItemView(item.id);
 
@@ -367,54 +464,7 @@
 				) as HTMLElement | null;
 				if (!el) return;
 
-				// Capture heights of all comments that will change
-				const heightsBefore = new Map<number, number>();
-				// We don't know which IDs yet, so snapshot all visible comments
-				const allCommentEls = document.querySelectorAll<HTMLElement>('d-comment[data-comment-id]');
-				for (const cel of allCommentEls) {
-					const id = Number(cel.dataset.commentId);
-					heightsBefore.set(id, cel.offsetHeight);
-				}
-
-				// Capture clicked comment position for scroll anchoring
-				const rectBefore = el.getBoundingClientRect();
-
-				const changed = toggleComment(comment);
-				await tick();
-
-				// Scroll anchoring — keep clicked comment in place
-				const rectAfter = el.getBoundingClientRect();
-				const shift = rectAfter.top - rectBefore.top;
-				if (Math.abs(shift) > 1) {
-					window.scrollBy(0, shift);
-				}
-
-				// Animate all changed comments
-				for (const id of changed) {
-					const cel = document.querySelector<HTMLElement>(`[data-comment-id="${id}"]`);
-					if (!cel) continue;
-					const hBefore = heightsBefore.get(id);
-					const hAfter = cel.offsetHeight;
-					if (hBefore === undefined || hBefore === hAfter) continue;
-
-					cel.style.overflow = 'hidden';
-					cel.style.height = `${hBefore}px`;
-					cel.style.transitionProperty = 'none';
-					void cel.offsetHeight;
-					cel.style.transitionProperty = 'height';
-					cel.style.transitionDuration = '350ms';
-					cel.style.transitionTimingFunction = 'ease-out';
-					cel.style.height = `${hAfter}px`;
-					const onEnd = () => {
-						cel.style.height = '';
-						cel.style.overflow = '';
-						cel.style.transitionProperty = '';
-						cel.style.transitionDuration = '';
-						cel.style.transitionTimingFunction = '';
-					};
-					cel.addEventListener('transitionend', onEnd, { once: true });
-					setTimeout(onEnd, 400);
-				}
+				await animateStateChange(el, () => toggleComment(comment));
 
 				el.classList.add('just-clicked');
 				setTimeout(() => el.classList.remove('just-clicked'), 1200);
@@ -446,67 +496,99 @@
 					{/if}
 					<s-time>{relativeTime(comment.time)}</s-time>
 				{/if}
-				{#if !isCollapsed && hasGrandchildren}
-					{@const eligibleChildIds = comment.comments
-						.filter((c) => !isHiddenComment(c) && hasVisibleGrandchildren(c))
-						.map((c) => c.id)}
-					{@const allEligibleIds = collectEligibleDescendantIds(comment.comments, [])}
-					{@const childrenGrouped = eligibleChildIds.some((id) => microCollapsedIds.has(id))}
-					{@const deeperGrouped = allEligibleIds.some(
-						(id) => !eligibleChildIds.includes(id) && microCollapsedIds.has(id)
-					)}
-					{@const groupLabel = childrenGrouped
-						? 'grouped'
-						: deeperGrouped
-							? 'partially grouped'
-							: 'ungrouped'}
+				{#if !isCollapsed && hasChildren}
+					{@const allDescendantIds = collectDescendantIds(comment.comments, [])}
+					{@const anyDescendantCollapsed = allDescendantIds.some((id) => collapsedIds.has(id))}
+					<s-reply-count>{descendantCount} replies</s-reply-count>
+					{#if hasGrandchildren}
+						{@const eligibleChildIds = comment.comments
+							.filter((c) => !isHiddenComment(c) && hasVisibleGrandchildren(c))
+							.map((c) => c.id)}
+						{@const allEligibleIds = collectEligibleDescendantIds(comment.comments, [])}
+						{@const childrenGrouped = eligibleChildIds.some((id) => microCollapsedIds.has(id))}
+						{@const deeperGrouped = allEligibleIds.some(
+							(id) => !eligibleChildIds.includes(id) && microCollapsedIds.has(id)
+						)}
+						{@const groupLabel = childrenGrouped
+							? 'grouped'
+							: deeperGrouped
+								? 'partially grouped'
+								: 'ungrouped'}
+						<!-- svelte-ignore a11y_no_static_element_interactions -->
+						<s-micro-toggle
+							class:grouped={childrenGrouped}
+							class:partial={!childrenGrouped && deeperGrouped}
+							onclick={async (e: MouseEvent) => {
+								e.stopPropagation();
+								const commentEl = document.querySelector<HTMLElement>(
+									`[data-comment-id="${comment.id}"]`
+								);
+								if (!commentEl) return;
+
+								await animateStateChange(commentEl, () => {
+									const nextMicro = new Set(microCollapsedIds);
+
+									if (childrenGrouped) {
+										for (const id of eligibleChildIds) {
+											nextMicro.delete(id);
+										}
+									} else if (deeperGrouped) {
+										for (const id of allEligibleIds) {
+											nextMicro.delete(id);
+										}
+									} else {
+										const nextCollapsed = new Set(collapsedIds);
+										for (const id of allEligibleIds) {
+											nextMicro.add(id);
+										}
+										for (const id of allDescendantIds) {
+											nextCollapsed.add(id);
+										}
+										collapsedIds = nextCollapsed;
+									}
+									microCollapsedIds = nextMicro;
+								});
+							}}>{groupLabel}</s-micro-toggle
+						>
+					{/if}
 					<!-- svelte-ignore a11y_no_static_element_interactions -->
-					<s-micro-toggle
-						class:grouped={childrenGrouped}
-						class:partial={!childrenGrouped && deeperGrouped}
+					<s-expand-toggle
 						onclick={async (e: MouseEvent) => {
 							e.stopPropagation();
 							const commentEl = document.querySelector<HTMLElement>(
 								`[data-comment-id="${comment.id}"]`
 							);
 							if (!commentEl) return;
-							const rectBefore = commentEl.getBoundingClientRect();
 
-							const nextMicro = new Set(microCollapsedIds);
-
-							if (childrenGrouped) {
-								// State: children grouped → ungroup direct children only
-								for (const id of eligibleChildIds) {
-									nextMicro.delete(id);
-								}
-							} else if (deeperGrouped) {
-								// State: children ungrouped, deeper still grouped → ungroup all
-								for (const id of allEligibleIds) {
-									nextMicro.delete(id);
-								}
-							} else {
-								// State: all ungrouped → group all descendants;
-								// also collapse their subtrees so strips are accurate
+							await animateStateChange(commentEl, () => {
 								const nextCollapsed = new Set(collapsedIds);
-								for (const id of allEligibleIds) {
-									nextMicro.add(id);
-								}
-								const allDescendants = collectDescendantIds(comment.comments, []);
-								for (const id of allDescendants) {
-									nextCollapsed.add(id);
+								const nextMicro = new Set(microCollapsedIds);
+
+								if (anyDescendantCollapsed) {
+									for (const id of allDescendantIds) {
+										nextCollapsed.delete(id);
+									}
+									const allEligible = hasGrandchildren
+										? collectEligibleDescendantIds(comment.comments, [])
+										: [];
+									for (const id of allEligible) {
+										nextMicro.delete(id);
+									}
+								} else {
+									for (const id of allDescendantIds) {
+										nextCollapsed.add(id);
+									}
+									if (hasGrandchildren) {
+										const allEligible = collectEligibleDescendantIds(comment.comments, []);
+										for (const id of allEligible) {
+											nextMicro.add(id);
+										}
+									}
 								}
 								collapsedIds = nextCollapsed;
-							}
-							microCollapsedIds = nextMicro;
-
-							await tick();
-
-							const rectAfter = commentEl.getBoundingClientRect();
-							const shift = rectAfter.top - rectBefore.top;
-							if (Math.abs(shift) > 1) {
-								window.scrollBy(0, shift);
-							}
-						}}>{descendantCount} replies: {groupLabel}</s-micro-toggle
+								microCollapsedIds = nextMicro;
+							});
+						}}>{anyDescendantCollapsed ? 'expand all' : 'collapse all'}</s-expand-toggle
 					>
 				{/if}
 			</d-comment-meta>
@@ -528,24 +610,16 @@
 						data-micro-id={comment.id}
 						onclick={async (e: MouseEvent) => {
 							e.stopPropagation();
-							const stripEl = e.currentTarget as HTMLElement;
 							const parentEl = document.querySelector<HTMLElement>(
 								`[data-comment-id="${comment.id}"]`
 							);
-							const anchorEl = parentEl || stripEl;
-							const rectBefore = anchorEl.getBoundingClientRect();
+							const anchorEl = parentEl || (e.currentTarget as HTMLElement);
 
-							const next = new Set(microCollapsedIds);
-							next.delete(comment.id);
-							microCollapsedIds = next;
-
-							await tick();
-
-							const rectAfter = anchorEl.getBoundingClientRect();
-							const shift = rectAfter.top - rectBefore.top;
-							if (Math.abs(shift) > 1) {
-								window.scrollBy(0, shift);
-							}
+							await animateStateChange(anchorEl, () => {
+								const next = new Set(microCollapsedIds);
+								next.delete(comment.id);
+								microCollapsedIds = next;
+							});
 						}}
 					>
 						{#each blocks as block}
@@ -1119,14 +1193,19 @@
 		font-variant-numeric: tabular-nums;
 	}
 
-	s-micro-toggle {
-		display: inline-flex;
-		align-items: center;
-		gap: 0.25ch;
+	s-reply-count {
 		margin-left: auto;
-		padding: 0 0.5ch;
 		font-size: 0.8em;
 		font-variant-numeric: tabular-nums;
+		color: light-dark(#999, #666);
+		white-space: nowrap;
+		user-select: none;
+	}
+
+	s-micro-toggle,
+	s-expand-toggle {
+		padding: 0 0.5ch;
+		font-size: 0.8em;
 		color: light-dark(#999, #666);
 		border-radius: 3px;
 		cursor: pointer;
@@ -1139,7 +1218,9 @@
 			color: light-dark(#555, #bbb);
 			background: light-dark(rgba(0, 0, 0, 0.08), rgba(255, 255, 255, 0.1));
 		}
+	}
 
+	s-micro-toggle {
 		&.grouped {
 			color: light-dark(#666, #999);
 			background: light-dark(rgba(74, 158, 218, 0.12), rgba(74, 158, 218, 0.18));
