@@ -152,7 +152,7 @@ Example render sequence:
 
 ### S strip segment appearance
 
-Each segment is a narrow colored block. Width and color are determined by the segment's own level — same palette as the left accent bar of L/M rows at that level, and a width scaled to level (matching `--bar-width`). This means a strip of mixed-level S comments renders as a row of varying-width, varying-color blocks, each visually encoding its depth. Strips pack segments left-to-right with a small gap; the strip's left indent matches the shallowest member's natural indent.
+Each segment is a narrow colored block. Width and color are determined by the segment's own level — same palette as the left accent bar of L/M rows at that level, and a width scaled to level (matching `--bar-width`). This means a strip of mixed-level S comments renders as a row of varying-width, varying-color blocks, each visually encoding its depth. Strips pack segments left-to-right with a small gap. Strips are flush-left (no indent) so the segment-width profile reads as a pure compressed level sequence, uninterrupted by indentation whitespace.
 
 ### S-grouping toggle (dev/debug)
 
