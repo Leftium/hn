@@ -868,6 +868,41 @@
 		}
 	}
 
+	/* --- M render mode: single-line, ellipsis-truncated body --- */
+	d-comment[data-lod='M'] d-comment-body {
+		display: block;
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		/* Hide line-break side-effects of inner block-level elements */
+	}
+
+	d-comment[data-lod='M'] d-comment-body :global {
+		p,
+		pre,
+		blockquote,
+		ul,
+		ol,
+		li {
+			display: inline;
+			margin: 0;
+			padding: 0;
+			background: transparent;
+			border: 0;
+			white-space: nowrap;
+		}
+
+		/* Separate consecutive paragraphs with a visual marker */
+		p + p::before {
+			content: ' · ';
+			opacity: 0.5;
+		}
+
+		br {
+			display: none;
+		}
+	}
+
 	d-empty {
 		display: block;
 		padding: var(--size-4) var(--size-2);
