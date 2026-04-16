@@ -403,6 +403,33 @@
 				{/if}
 				<s-time>{relativeTime(comment.time)}</s-time>
 			{/if}
+			<!-- Dev UI (Phase 3): LOD toggle buttons. Replaced in Phase 5. -->
+			<s-lod-dev>
+				<button
+					type="button"
+					class="lod-btn"
+					class:active={lod === 'L'}
+					aria-label="set LOD to L"
+					onclick={() => toggleLOD(comment.id, 'L')}>L</button
+				><button
+					type="button"
+					class="lod-btn"
+					class:active={lod === 'M'}
+					aria-label="set LOD to M"
+					onclick={() => toggleLOD(comment.id, 'M')}>M</button
+				><button
+					type="button"
+					class="lod-btn"
+					class:active={lod === 'S'}
+					aria-label="set LOD to S"
+					onclick={() => toggleLOD(comment.id, 'S')}>S</button
+				><button
+					type="button"
+					class="lod-btn cycle"
+					aria-label="cycle LOD"
+					onclick={() => toggleLOD(comment.id)}>↻</button
+				>
+			</s-lod-dev>
 		</d-comment-meta>
 	</d-comment>
 {/snippet}
@@ -1060,6 +1087,47 @@
 
 		&:hover {
 			opacity: 1;
+		}
+	}
+
+	/* --- Dev UI: LOD toggle buttons (Phase 3, removed in Phase 5) --- */
+	s-lod-dev {
+		display: inline-flex;
+		margin-left: auto;
+		font-family: var(--font-mono, monospace);
+		border: 1px solid light-dark(#ccc, #444);
+		border-radius: 3px;
+		overflow: hidden;
+	}
+
+	button.lod-btn {
+		padding: 0 0.4em;
+		font-size: 0.75em;
+		font-family: inherit;
+		line-height: 1.4;
+		background: light-dark(#f5f5f5, #2a2a2a);
+		color: light-dark(#888, #888);
+		border: 0;
+		border-right: 1px solid light-dark(#ccc, #444);
+		cursor: pointer;
+		transition: background 0.1s ease;
+
+		&:last-child {
+			border-right: 0;
+		}
+
+		&:hover {
+			background: light-dark(#e5e5e5, #333);
+			color: light-dark(#333, #ccc);
+		}
+
+		&.active {
+			background: light-dark(#ff6600, #ff6600);
+			color: #fff;
+		}
+
+		&.cycle {
+			font-weight: bold;
 		}
 	}
 
