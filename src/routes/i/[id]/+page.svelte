@@ -211,23 +211,23 @@
 		walk(item.comments, 1);
 
 		// Second pass: merge adjacent S runs into strips.
+		// When grouping is disabled (?group=0), skip merging — solo-S comments
+		// then render via the commentRow s-solo path for debug inspection.
 		if (!sGroupingEnabled) return rows;
 
 		const result: RenderItem[] = [];
 		let run: RowItem[] = [];
 		const flushRun = () => {
 			if (run.length === 0) return;
-			if (run.length === 1) {
-				result.push(run[0]);
-			} else {
-				let minLevel = Infinity;
-				for (const r of run) if (r.level < minLevel) minLevel = r.level;
-				result.push({
-					kind: 'strip',
-					minLevel,
-					segments: run.map((r) => ({ id: r.id, level: r.level, comment: r.comment }))
-				});
-			}
+			// Always emit as a strip (even for a single S) so solo-S gets the
+			// same flush-left colored-block + bulk dev UI treatment as multi-S.
+			let minLevel = Infinity;
+			for (const r of run) if (r.level < minLevel) minLevel = r.level;
+			result.push({
+				kind: 'strip',
+				minLevel,
+				segments: run.map((r) => ({ id: r.id, level: r.level, comment: r.comment }))
+			});
 			run = [];
 		};
 		for (const row of rows) {
