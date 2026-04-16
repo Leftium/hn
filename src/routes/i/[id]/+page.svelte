@@ -52,16 +52,30 @@
 	// Parent map: child ID → parent ID (for ancestor expansion)
 	let parentMap = $state(new Map<number, number>());
 
-	/** Collect all comment IDs at depth > 0, and build child→parent map */
+	// Children map: parent ID → visible child IDs (for sibling lookups)
+	let childrenMap = $state(new Map<number, number[]>());
+
+	// IDs that were auto-micro-grouped by leaf expansion (so we can reverse it)
+	let autoGroupedIds = $state(new Set<number>());
+
+	// Thread-protected child IDs: these children are excluded from their parent's
+	// micro-collapse strip (rendered normally while siblings become strips)
+	let threadChildIds = $state(new Set<number>());
+
+	/** Collect all comment IDs at depth > 0, and build child→parent map + parent→children map */
 	function buildCommentMaps(
 		comments: HnpwaItem[],
 		depth: number,
 		parentId: number | null,
 		collapsed: Set<number>,
 		parents: Map<number, number>,
+		children: Map<number, number[]>,
 		microCollapsed: Set<number>
 	) {
+		const visibleIds: number[] = [];
 		for (const c of comments) {
+			if (isHiddenComment(c)) continue;
+			visibleIds.push(c.id);
 			if (depth > 0) collapsed.add(c.id);
 			if (parentId !== null) parents.set(c.id, parentId);
 			// Non-root comments with visible grandchildren get micro-collapsed by default.
@@ -70,7 +84,10 @@
 				microCollapsed.add(c.id);
 			}
 			if (c.comments?.length)
-				buildCommentMaps(c.comments, depth + 1, c.id, collapsed, parents, microCollapsed);
+				buildCommentMaps(c.comments, depth + 1, c.id, collapsed, parents, children, microCollapsed);
+		}
+		if (parentId !== null) {
+			children.set(parentId, visibleIds);
 		}
 	}
 
@@ -104,15 +121,19 @@
 		return out;
 	}
 
-	// Re-initialize collapsed set, parent map, and micro-collapsed set whenever item changes
+	// Re-initialize collapsed set, parent map, children map, and micro-collapsed set whenever item changes
 	$effect(() => {
 		const collapsed = new Set<number>();
 		const parents = new Map<number, number>();
+		const children = new Map<number, number[]>();
 		const micro = new Set<number>();
-		buildCommentMaps(item.comments, 0, null, collapsed, parents, micro);
+		buildCommentMaps(item.comments, 0, null, collapsed, parents, children, micro);
 		collapsedIds = collapsed;
 		parentMap = parents;
+		childrenMap = children;
 		microCollapsedIds = micro;
+		autoGroupedIds = new Set<number>();
+		threadChildIds = new Set<number>();
 	});
 
 	/** Strip HTML tags and decode entities to plain text for collapsed preview */
@@ -177,11 +198,15 @@
 		const next = new Set(collapsedIds);
 
 		if (selfCollapsed) {
+			const isLeaf = childIds.length === 0;
+
 			// Expand self + all ancestors
 			if (next.delete(comment.id)) changed.add(comment.id);
+			const expandedAncestors: number[] = [];
 			let ancestorId = parentMap.get(comment.id);
 			while (ancestorId !== undefined) {
 				if (next.delete(ancestorId)) changed.add(ancestorId);
+				expandedAncestors.push(ancestorId);
 				ancestorId = parentMap.get(ancestorId);
 			}
 			// Also expand direct children
@@ -195,6 +220,40 @@
 			for (const id of childIds) {
 				nextMicro.delete(id);
 			}
+
+			if (isLeaf) {
+				// For leaf comments: micro-group the *parents* along the thread path
+				// so non-thread siblings become strips, while the thread child is
+				// rendered normally (protected via threadChildIds).
+
+				// Reverse any previous auto-grouping first
+				for (const id of autoGroupedIds) {
+					nextMicro.delete(id);
+				}
+				const newAutoGrouped = new Set<number>();
+				const newThreadChildren = new Set<number>();
+
+				// Walk the thread path: for each node, micro-group its parent
+				// (which strips all siblings) and protect the node itself
+				const threadNodes = [comment.id, ...expandedAncestors];
+				for (const nodeId of threadNodes) {
+					const pid = parentMap.get(nodeId);
+					if (pid === undefined) continue; // depth-0, no parent to group
+
+					// Protect this node from being stripped
+					newThreadChildren.add(nodeId);
+
+					// Micro-group the parent (if not already micro-grouped)
+					if (!nextMicro.has(pid)) {
+						nextMicro.add(pid);
+						newAutoGrouped.add(pid);
+					}
+				}
+
+				autoGroupedIds = newAutoGrouped;
+				threadChildIds = newThreadChildren;
+			}
+
 			microCollapsedIds = nextMicro;
 		} else if (childIds.length === 0) {
 			// Expanded leaf: collapse self + all ancestors at depth >= 1
@@ -208,6 +267,16 @@
 				if (!next.has(ancestorId)) changed.add(ancestorId);
 				next.add(ancestorId);
 				ancestorId = parentMap.get(ancestorId);
+			}
+			// Reverse any auto-micro-grouping from the previous leaf expansion
+			if (autoGroupedIds.size > 0) {
+				const nextMicro = new Set(microCollapsedIds);
+				for (const id of autoGroupedIds) {
+					nextMicro.delete(id);
+				}
+				microCollapsedIds = nextMicro;
+				autoGroupedIds = new Set<number>();
+				threadChildIds = new Set<number>();
 			}
 		} else {
 			// Already expanded with children: toggle direct children only
@@ -429,6 +498,15 @@
 	</svg>
 {/snippet}
 
+{#snippet leafIcon()}
+	<svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24">
+		<path
+			fill="currentColor"
+			d="M17 8C8 10 5.9 16.17 3.82 21.34l1.89.66l.95-2.3c.48.17.98.3 1.34.3C19 20 22 3 22 3c-1 2-8 2.25-13 3.25S2 11.5 2 13.5s1.75 3.75 1.75 3.75C7 8 17 8 17 8"
+		/>
+	</svg>
+{/snippet}
+
 {#snippet commentTree(comments: HnpwaItem[], depth: number)}
 	{#each comments.filter((c) => !isHiddenComment(c)) as comment (comment.id)}
 		{@const isDead = comment.content === '<p>[dead]'}
@@ -442,6 +520,7 @@
 		{@const hasChildren = comment.comments.filter((c) => !isHiddenComment(c)).length > 0}
 		{@const hasGrandchildren = hasVisibleGrandchildren(comment)}
 		{@const descendantCount = hasChildren ? countVisibleDescendants(comment.comments) : 0}
+		{@const isLeaf = !hasChildren}
 		<!-- svelte-ignore a11y_no_static_element_interactions -->
 		<d-comment
 			data-comment-id={comment.id}
@@ -495,6 +574,9 @@
 						<s-new-badge>NEW</s-new-badge>
 					{/if}
 					<s-time>{relativeTime(comment.time)}</s-time>
+					{#if isLeaf}
+						<s-leaf-icon>{@render leafIcon()}</s-leaf-icon>
+					{/if}
 				{/if}
 				{#if !isCollapsed && hasChildren}
 					{@const allDescendantIds = collectDescendantIds(comment.comments, [])}
@@ -602,7 +684,11 @@
 			{/if}
 		</d-comment>
 		{#if comment.comments.length > 0}
-			{#if microCollapsedIds.has(comment.id)}
+			{@const isMicroCollapsed = microCollapsedIds.has(comment.id)}
+			{@const threadChild = isMicroCollapsed
+				? comment.comments.find((c) => !isHiddenComment(c) && threadChildIds.has(c.id))
+				: null}
+			{#if isMicroCollapsed && !threadChild}
 				{@const blocks = buildMicroBlocks(comment.comments, depth + 1)}
 				{#if blocks.length > 0}
 					<!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -628,6 +714,36 @@
 						{/each}
 					</d-micro-collapsed>
 				{/if}
+			{:else if isMicroCollapsed && threadChild}
+				{@const nonThreadChildren = comment.comments.filter(
+					(c) => !isHiddenComment(c) && c.id !== threadChild.id
+				)}
+				{@const blocks = buildMicroBlocks(nonThreadChildren, depth + 1)}
+				{#if blocks.length > 0}
+					<!-- svelte-ignore a11y_no_static_element_interactions -->
+					<d-micro-collapsed
+						data-micro-id={comment.id}
+						onclick={async (e: MouseEvent) => {
+							e.stopPropagation();
+							const parentEl = document.querySelector<HTMLElement>(
+								`[data-comment-id="${comment.id}"]`
+							);
+							const anchorEl = parentEl || (e.currentTarget as HTMLElement);
+
+							await animateStateChange(anchorEl, () => {
+								const next = new Set(microCollapsedIds);
+								next.delete(comment.id);
+								microCollapsedIds = next;
+							});
+						}}
+					>
+						{#each blocks as block}
+							<s-micro-block style:width="{block.width}px" style:background={block.color}
+							></s-micro-block>
+						{/each}
+					</d-micro-collapsed>
+				{/if}
+				{@render commentTree([threadChild], depth + 1)}
 			{:else}
 				{@render commentTree(comment.comments, depth + 1)}
 			{/if}
@@ -1191,6 +1307,19 @@
 
 	d-comment-meta s-time {
 		font-variant-numeric: tabular-nums;
+	}
+
+	s-leaf-icon {
+		display: inline-flex;
+		align-items: center;
+		color: light-dark(#8bc34a, #6a9f3a);
+		opacity: 0.5;
+		font-size: 0.85em;
+
+		svg {
+			width: 1em;
+			height: 1em;
+		}
 	}
 
 	s-reply-count {
