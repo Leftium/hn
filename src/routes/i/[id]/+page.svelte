@@ -80,12 +80,102 @@
 		return { parentOf, childrenOf, levelOf, allIds };
 	});
 
+	// --- LOD primitives ---
+	// setLOD writes uniformly for all ids (no default-cleanup, no special cases).
+	// Post id may be written freely; the renderer never reads the post's entry.
+	function setLOD(ids: Iterable<number>, lod: 'L' | 'M' | 'S'): void {
+		for (const id of ids) lodState.set(id, lod);
+	}
+
+	// toggleLOD: with override, sets directly. Without, cycles L → M → S → L.
+	function toggleLOD(id: number, override?: 'L' | 'M' | 'S'): void {
+		if (override) {
+			lodState.set(id, override);
+			return;
+		}
+		const current = getLOD(id);
+		const next = current === 'L' ? 'M' : current === 'M' ? 'S' : 'L';
+		lodState.set(id, next);
+	}
+
+	// --- Target selectors (pure) ---
+	// All selectors return number[] and read from treeIndex. Callers wrap in
+	// `new Set(...)` when set operations are needed. Post id is never included
+	// in allComments(); it may appear in ancestorsOf() output as the terminal element.
+	function self(id: number): number[] {
+		return [id];
+	}
+
+	function parentOf(id: number): number[] {
+		const p = treeIndex.parentOf.get(id);
+		return p === undefined ? [] : [p];
+	}
+
+	function ancestorsOf(id: number): number[] {
+		const result: number[] = [];
+		let current = treeIndex.parentOf.get(id);
+		while (current !== undefined) {
+			result.push(current);
+			current = treeIndex.parentOf.get(current);
+		}
+		return result;
+	}
+
+	function childrenOf(id: number): number[] {
+		return treeIndex.childrenOf.get(id) ?? [];
+	}
+
+	function descendantsOf(id: number): number[] {
+		const result: number[] = [];
+		const stack = [...childrenOf(id)];
+		while (stack.length > 0) {
+			const next = stack.shift()!;
+			result.push(next);
+			stack.unshift(...childrenOf(next));
+		}
+		return result;
+	}
+
+	function subtreeOf(id: number): number[] {
+		return [id, ...descendantsOf(id)];
+	}
+
+	function siblingsOf(id: number): number[] {
+		const parent = treeIndex.parentOf.get(id);
+		if (parent === undefined) return [];
+		return (treeIndex.childrenOf.get(parent) ?? []).filter((sibId) => sibId !== id);
+	}
+
+	function allComments(): number[] {
+		return treeIndex.allIds;
+	}
+
 	// New-comment tracking: threshold is the viewedAt from the previous visit.
 	// null = first visit (no highlights). Set on mount from IndexedDB.
 	let newCommentThreshold = $state<number | null>(null);
 	let newCommentCount = $state(0);
 
 	onMount(async () => {
+		// Expose LOD primitives to window for DevTools testing (removed in Phase 5).
+		(window as any).__lod = {
+			get state() {
+				return lodState;
+			},
+			get index() {
+				return treeIndex;
+			},
+			setLOD,
+			toggleLOD,
+			self,
+			parentOf,
+			ancestorsOf,
+			childrenOf,
+			descendantsOf,
+			subtreeOf,
+			siblingsOf,
+			allComments
+		};
+
 		const previous = await getItemView(item.id);
 
 		if (previous) {
@@ -203,6 +293,11 @@
 			data-level={level}
 			data-index-level={treeIndex.levelOf.get(comment.id)}
 		>
+			{#if comment.content && !isDead}
+				<d-comment-body>
+					{@html comment.content}
+				</d-comment-body>
+			{/if}
 			<d-comment-meta>
 				<s-level style:color={LEVEL_COLORS[colorIndex]}>{level - 1}</s-level>
 				{#if isDead}
@@ -228,11 +323,6 @@
 					<s-time>{relativeTime(comment.time)}</s-time>
 				{/if}
 			</d-comment-meta>
-			{#if comment.content && !isDead}
-				<d-comment-body>
-					{@html comment.content}
-				</d-comment-body>
-			{/if}
 		</d-comment>
 		{#if comment.comments.length > 0}
 			{@render commentTree(comment.comments, level + 1)}
@@ -659,8 +749,13 @@
 		gap: 0.5ch;
 		font-size: var(--font-size-0);
 		color: light-dark(#888, #777);
-		margin-bottom: var(--size-1);
 		align-items: baseline;
+
+		/* Spacing applies only when meta follows a body (typical case);
+		   bodyless comments render meta alone without extra margin. */
+		&:not(:first-child) {
+			margin-top: var(--size-1);
+		}
 	}
 
 	.author-link {
