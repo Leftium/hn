@@ -1177,35 +1177,73 @@
 	   segment's width and color encode its own level (matching the left
 	   accent bar of L/M rows at that level). Strip is flush-left (no indent)
 	   so segment widths read as a pure level profile of the compressed run.
-	   Right side: bulk dev-UI buttons for setting all members at once. */
+	   Right side: bulk dev-UI buttons for setting all members at once.
+
+	   Solo strips (data-strip-size="1") collapse vertical padding and render
+	   the segment as a full-height, square-cornered accent-bar block — a
+	   visual extension of the left-accent-bar style used on L/M rows. */
+	/* Strip row: a horizontal band of accent-bar segments spanning the full
+	   row height with no vertical padding/margin. Each segment is square-
+	   cornered and stretches top-to-bottom — visually a run of left-accent
+	   bars extended rightward. An explicit min-height gives the flex
+	   container something for children to stretch against. */
 	d-comment-strip {
 		display: flex;
 		gap: var(--size-2);
-		align-items: center;
-		padding: var(--size-1) var(--size-2) var(--size-1) 0;
+		align-items: stretch;
+		min-height: 0.875em;
+		padding: 0 var(--size-2) 0 0;
+		margin: 0;
 		background: light-dark(#ffffff, #262626);
 		border-top: 1px solid light-dark(#e6e6df, #3a3a3a);
+		/* Row is intentionally short; dev-UI buttons are positioned absolutely
+		   so they don't force the row height via flex stretch, and overflow
+		   vertically above/below the band. */
+		position: relative;
+		overflow: visible;
+	}
+
+	d-comment-strip > s-lod-dev {
+		position: absolute;
+		right: var(--size-2);
+		top: 50%;
+		transform: translateY(-50%);
 	}
 
 	d-strip-segs {
 		display: flex;
-		gap: 2px;
-		align-items: center;
+		gap: 0;
+		align-items: stretch;
 		flex: 1 1 auto;
 		min-width: 0;
-		flex-wrap: wrap;
+		/* No flex-wrap: wrapping allocates extra cross-axis space per line
+		   which manifests as a bottom margin on segments. Single line only. */
+		flex-wrap: nowrap;
+		overflow: hidden;
 	}
 
 	button.strip-seg {
 		display: block;
 		flex: 0 0 auto;
+		align-self: stretch;
 		width: var(--seg-width, 4px);
-		height: 0.75em;
+		height: auto;
+		/* Open Props normalize.css adds margin-block-end to buttons; zero it. */
+		margin: 0;
 		padding: 0;
 		background: color-mix(in srgb, var(--seg-color, #888) 70%, transparent);
 		border: 0;
-		border-radius: 2px;
+		border-radius: 0;
 		cursor: pointer;
+		/* Hairline divider on the left edge of each segment, matching the
+		   row-separator color used elsewhere in the grid. No layout impact
+		   (inset shadow, no gap). First segment's divider falls outside
+		   d-strip-segs overflow so it's clipped. */
+		box-shadow: inset 1px 0 0
+			light-dark(
+				color-mix(in srgb, #e6e6df 50%, transparent),
+				color-mix(in srgb, #3a3a3a 50%, transparent)
+			);
 		transition: background 0.15s ease;
 
 		&:hover {
@@ -1213,7 +1251,11 @@
 		}
 	}
 
-	/* --- Dev UI: LOD toggle buttons (Phase 3, removed in Phase 5) --- */
+	/* --- Dev UI: LOD toggle buttons (Phase 3, removed in Phase 5) ---
+	   Hidden by default; revealed on row hover so at most one row's controls
+	   show at a time. Opacity (not visibility) preserves layout space so M
+	   row body widths don't jump when hovering. On touch devices without
+	   hover (hover: none), show always — users can't reveal them otherwise. */
 	s-lod-dev {
 		display: inline-flex;
 		margin-left: auto;
@@ -1221,6 +1263,20 @@
 		border: 1px solid light-dark(#ccc, #444);
 		border-radius: 3px;
 		overflow: hidden;
+		opacity: 0;
+		transition: opacity 0.1s ease;
+	}
+
+	d-comment:hover > s-lod-dev,
+	d-comment-strip:hover > s-lod-dev,
+	s-lod-dev:focus-within {
+		opacity: 1;
+	}
+
+	@media (hover: none) {
+		s-lod-dev {
+			opacity: 1;
+		}
 	}
 
 	button.lod-btn {
