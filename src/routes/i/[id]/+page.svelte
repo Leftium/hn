@@ -177,20 +177,24 @@
 
 	// --- Flat render list ---
 	// Walks item.comments in pre-order producing an ordered list of render
-	// items. Consecutive same-level S rows (by LOD) are merged into a strip
-	// unless sGroupingEnabled is false. Interruption rules (strict pre-order):
-	// any non-S row, or any S row at a different level, ends the current strip.
+	// items. Consecutive S rows (by LOD) are merged into a single strip
+	// regardless of level, unless sGroupingEnabled is false. Any non-S row
+	// ends the current strip. Tree order is preserved.
 	interface RowItem {
 		kind: 'row';
 		id: number;
 		level: number;
 		comment: HnpwaItem;
 	}
+	interface StripSeg {
+		id: number;
+		level: number;
+		comment: HnpwaItem;
+	}
 	interface StripItem {
 		kind: 'strip';
-		level: number;
-		ids: number[];
-		comments: HnpwaItem[];
+		minLevel: number; // shallowest member level (used for indent anchor)
+		segments: StripSeg[];
 	}
 	type RenderItem = RowItem | StripItem;
 
@@ -206,7 +210,7 @@
 		}
 		walk(item.comments, 1);
 
-		// Second pass: merge adjacent same-level S runs into strips.
+		// Second pass: merge adjacent S runs into strips.
 		if (!sGroupingEnabled) return rows;
 
 		const result: RenderItem[] = [];
@@ -216,26 +220,22 @@
 			if (run.length === 1) {
 				result.push(run[0]);
 			} else {
+				let minLevel = Infinity;
+				for (const r of run) if (r.level < minLevel) minLevel = r.level;
 				result.push({
 					kind: 'strip',
-					level: run[0].level,
-					ids: run.map((r) => r.id),
-					comments: run.map((r) => r.comment)
+					minLevel,
+					segments: run.map((r) => ({ id: r.id, level: r.level, comment: r.comment }))
 				});
 			}
 			run = [];
 		};
 		for (const row of rows) {
-			const isS = getLOD(row.id) === 'S';
-			if (isS && (run.length === 0 || run[0].level === row.level)) {
+			if (getLOD(row.id) === 'S') {
 				run.push(row);
 			} else {
 				flushRun();
-				if (isS) {
-					run.push(row);
-				} else {
-					result.push(row);
-				}
+				result.push(row);
 			}
 		}
 		flushRun();
@@ -393,34 +393,42 @@
 				aria-label="cycle LOD for comment {comment.id}"
 				onclick={() => toggleLOD(comment.id)}
 			></button>
-		{:else if comment.content && !isDead}
-			<d-comment-body>
-				{@html comment.content}
-			</d-comment-body>
-		{/if}
-		<d-comment-meta>
-			<s-level style:color={LEVEL_COLORS[colorIndex]}>{level - 1}</s-level>
-			{#if isDead}
-				<a href="https://news.ycombinator.com/item?id={comment.id}" class="dead-link">[dead]</a>
-				{#if comment.user}
-					<a href="https://news.ycombinator.com/user?id={comment.user}" class="dead-link">
-						{comment.user}
+		{:else}
+			<!--
+				L/M row structure: [meta-info] [body] [dev-ui]. Three siblings in one
+				fixed DOM order. CSS re-arranges per LOD:
+				  - L: grid with body above a [meta-info | dev-ui] row
+				  - M: flex-row with body flex-growing between meta-info and dev-ui
+			-->
+			<d-comment-meta>
+				<s-level style:color={LEVEL_COLORS[colorIndex]}>{level - 1}</s-level>
+				{#if isDead}
+					<a href="https://news.ycombinator.com/item?id={comment.id}" class="dead-link">[dead]</a>
+					{#if comment.user}
+						<a href="https://news.ycombinator.com/user?id={comment.user}" class="dead-link">
+							{comment.user}
+						</a>
+					{/if}
+					<s-time>{relativeTime(comment.time)}</s-time>
+				{:else if isDeleted}
+					<s-author class="deleted">[deleted]</s-author>
+				{:else}
+					<a href="https://news.ycombinator.com/user?id={comment.user}" class="author-link">
+						<s-author>{comment.user}</s-author>
 					</a>
+					{#if isOp}
+						<s-op-badge>OP</s-op-badge>
+					{/if}
+					{#if isNew}
+						<s-new-badge>NEW</s-new-badge>
+					{/if}
+					<s-time>{relativeTime(comment.time)}</s-time>
 				{/if}
-				<s-time>{relativeTime(comment.time)}</s-time>
-			{:else if isDeleted}
-				<s-author class="deleted">[deleted]</s-author>
-			{:else}
-				<a href="https://news.ycombinator.com/user?id={comment.user}" class="author-link">
-					<s-author>{comment.user}</s-author>
-				</a>
-				{#if isOp}
-					<s-op-badge>OP</s-op-badge>
-				{/if}
-				{#if isNew}
-					<s-new-badge>NEW</s-new-badge>
-				{/if}
-				<s-time>{relativeTime(comment.time)}</s-time>
+			</d-comment-meta>
+			{#if comment.content && !isDead}
+				<d-comment-body>
+					{@html comment.content}
+				</d-comment-body>
 			{/if}
 			<!-- Dev UI (Phase 3): LOD toggle buttons. Replaced in Phase 5. -->
 			<s-lod-dev>
@@ -439,7 +447,6 @@
 				><button
 					type="button"
 					class="lod-btn"
-					class:active={lod === 'S'}
 					aria-label="set LOD to S"
 					onclick={() => toggleLOD(comment.id, 'S')}>S</button
 				><button
@@ -449,27 +456,29 @@
 					onclick={() => toggleLOD(comment.id)}>↻</button
 				>
 			</s-lod-dev>
-		</d-comment-meta>
+		{/if}
 	</d-comment>
 {/snippet}
 
 {#snippet stripRow(strip: StripItem)}
-	{@const indent = Math.min(strip.level - 1, MAX_INDENT)}
-	{@const colorIndex = (strip.level - 1) % LEVEL_COLORS.length}
+	{@const indent = Math.min(strip.minLevel - 1, MAX_INDENT)}
 	<d-comment-strip
-		style:--level={strip.level}
 		style:--indent={indent}
-		style:--level-color={LEVEL_COLORS[colorIndex]}
-		data-level={strip.level}
-		data-strip-size={strip.ids.length}
+		data-min-level={strip.minLevel}
+		data-strip-size={strip.segments.length}
 	>
-		{#each strip.ids as id (id)}
+		{#each strip.segments as seg (seg.id)}
+			{@const segColor = LEVEL_COLORS[(seg.level - 1) % LEVEL_COLORS.length]}
+			{@const segWidth = seg.level === 1 ? 3 : Math.min(1 + seg.level, 14)}
 			<button
 				type="button"
 				class="strip-seg"
-				aria-label="cycle LOD for comment {id}"
-				title="cycle LOD for #{id}"
-				onclick={() => toggleLOD(id)}
+				style:--seg-color={segColor}
+				style:--seg-width="{segWidth}px"
+				data-seg-level={seg.level}
+				aria-label="cycle LOD for comment {seg.id} (level {seg.level})"
+				title="level {seg.level} — cycle LOD for #{seg.id}"
+				onclick={() => toggleLOD(seg.id)}
 			></button>
 		{/each}
 	</d-comment-strip>
@@ -546,7 +555,7 @@
 
 	{#if item.comments.length > 0}
 		<d-comments>
-			{#each renderList as renderItem (renderItem.kind === 'row' ? `r-${renderItem.id}` : `s-${renderItem.ids[0]}`)}
+			{#each renderList as renderItem (renderItem.kind === 'row' ? `r-${renderItem.id}` : `s-${renderItem.segments[0].id}`)}
 				{#if renderItem.kind === 'row'}
 					{@render commentRow(renderItem.comment, renderItem.level)}
 				{:else}
@@ -852,7 +861,21 @@
 	}
 
 	d-comment {
-		display: block;
+		/*
+			Default layout (L): grid with body on top, meta-info bottom-left,
+			dev-UI bottom-right. Three children in fixed DOM order:
+			  <d-comment-meta>  → area "meta"
+			  <d-comment-body>  → area "body"
+			  <s-lod-dev>       → area "dev"
+			S-solo and dead rows place a single child in "body" area; that's fine.
+		*/
+		display: grid;
+		grid-template-columns: 1fr auto;
+		grid-template-areas:
+			'body body'
+			'meta dev';
+		column-gap: var(--size-2);
+		row-gap: var(--size-1);
 		padding: var(--size-2) var(--size-2) var(--size-2)
 			calc(var(--size-3) * var(--indent, 0) + var(--size-2));
 		border-top: 1px solid light-dark(#e6e6df, #3a3a3a);
@@ -883,6 +906,34 @@
 			border-right: 3px solid #ff6600;
 			background: light-dark(rgba(255, 102, 0, 0.03), rgba(255, 102, 0, 0.06));
 		}
+
+		> d-comment-meta {
+			grid-area: meta;
+		}
+
+		> d-comment-body {
+			grid-area: body;
+		}
+
+		> s-lod-dev {
+			grid-area: dev;
+			align-self: center;
+		}
+
+		/*
+			M layout override: single line. Switch to flex so body can flex-grow
+			between meta-info and dev-UI, and ellipsis-truncate. Grid areas are
+			ignored when display changes away from grid.
+		*/
+		&[data-lod='M'] {
+			display: flex;
+			flex-direction: row;
+			align-items: baseline;
+			gap: 0.5ch;
+			/* Tighter vertical padding for single-line rows */
+			padding-top: var(--size-1);
+			padding-bottom: var(--size-1);
+		}
 	}
 
 	s-level {
@@ -901,12 +952,7 @@
 		font-size: var(--font-size-0);
 		color: light-dark(#888, #777);
 		align-items: baseline;
-
-		/* Spacing applies only when meta follows a body (typical case);
-		   bodyless comments render meta alone without extra margin. */
-		&:not(:first-child) {
-			margin-top: var(--size-1);
-		}
+		flex-wrap: wrap;
 	}
 
 	.author-link {
@@ -1019,13 +1065,27 @@
 		}
 	}
 
-	/* --- M render mode: single-line, ellipsis-truncated body --- */
+	/* --- M render mode: single-line, ellipsis-truncated body ---
+	   flex-row parent supplies horizontal packing; body flex-grows and
+	   min-width: 0 allows it to shrink so text-overflow: ellipsis engages. */
 	d-comment[data-lod='M'] d-comment-body {
 		display: block;
+		flex: 1 1 0;
+		min-width: 0;
 		white-space: nowrap;
 		overflow: hidden;
 		text-overflow: ellipsis;
-		/* Hide line-break side-effects of inner block-level elements */
+	}
+
+	/* M meta stays on one line (no wrap); dev-UI similarly compact. */
+	d-comment[data-lod='M'] d-comment-meta {
+		flex-wrap: nowrap;
+		white-space: nowrap;
+		flex: 0 0 auto;
+	}
+
+	d-comment[data-lod='M'] s-lod-dev {
+		flex: 0 0 auto;
 	}
 
 	d-comment[data-lod='M'] d-comment-body :global {
@@ -1056,8 +1116,10 @@
 
 	/* --- S render mode (ungrouped solo) ---
 	   When sGroupingEnabled is false, each S comment renders as its own row
-	   with a tiny colored block in place of the body. */
+	   with a tiny colored block in place of the body. Override grid → block
+	   since there's only one child (no body/meta/dev triple). */
 	d-comment[data-lod='S'] {
+		display: block;
 		padding-top: var(--size-1);
 		padding-bottom: var(--size-1);
 	}
@@ -1080,11 +1142,14 @@
 	}
 
 	/* --- S render mode (grouped strip) ---
-	   A horizontal row divided into equal-width clickable segments,
-	   one per S id. Uses the same indent/level-color as a regular row. */
+	   A horizontal row of narrow, non-filling clickable segments. Each
+	   segment's width and color encode its own level (matching the left
+	   accent bar of L/M rows at that level). The strip anchors its left
+	   edge to the shallowest member's natural indent. */
 	d-comment-strip {
 		display: flex;
-		gap: 1px;
+		gap: 2px;
+		align-items: center;
 		padding: var(--size-1) var(--size-2) var(--size-1)
 			calc(var(--size-3) * var(--indent, 0) + var(--size-2));
 		background: light-dark(#ffffff, #262626);
@@ -1093,19 +1158,18 @@
 
 	button.strip-seg {
 		display: block;
-		flex: 1 1 0;
+		flex: 0 0 auto;
+		width: var(--seg-width, 4px);
 		height: 0.75em;
 		padding: 0;
-		background: var(--level-color, #888);
-		opacity: 0.6;
+		background: color-mix(in srgb, var(--seg-color, #888) 70%, transparent);
 		border: 0;
 		border-radius: 2px;
 		cursor: pointer;
-		min-width: 0.5ch;
-		transition: opacity 0.15s ease;
+		transition: background 0.15s ease;
 
 		&:hover {
-			opacity: 1;
+			background: var(--seg-color, #888);
 		}
 	}
 
