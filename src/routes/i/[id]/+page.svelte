@@ -14,11 +14,11 @@
 	import 'open-props/style';
 	import dayjs from 'dayjs';
 
-	/** Max indent levels before capping (deeper comments show same indent but retain depth indicator) */
+	/** Max indent steps before capping (deeper comments share the max indent but keep their level badge) */
 	const MAX_INDENT = 5;
 
-	/** Cycling color palette for depth indicators — chosen for visual distinction */
-	const DEPTH_COLORS = [
+	/** Cycling color palette per level — chosen for visual distinction */
+	const LEVEL_COLORS = [
 		'#4a9eda', // blue
 		'#2ea87e', // green
 		'#c4872f', // amber
@@ -180,32 +180,31 @@
 	</svg>
 {/snippet}
 
-{#snippet commentTree(comments: HnpwaItem[], depth: number)}
+{#snippet commentTree(comments: HnpwaItem[], level: number)}
 	{#each comments.filter((c) => !isHiddenComment(c)) as comment (comment.id)}
 		{@const isDead = comment.content === '<p>[dead]'}
 		{@const isDeleted = !comment.user}
 		{@const isOp = !isDead && !!comment.user && comment.user === item.user}
 		{@const isNew = newCommentThreshold !== null && comment.time > newCommentThreshold}
-		{@const indent = Math.min(depth, MAX_INDENT)}
-		{@const colorIndex = depth % DEPTH_COLORS.length}
-		{@const barWidth = depth === 0 ? 0 : Math.min(2 + depth, 14)}
+		{@const indent = Math.min(level - 1, MAX_INDENT)}
+		{@const colorIndex = (level - 1) % LEVEL_COLORS.length}
+		{@const barWidth = level === 1 ? 0 : Math.min(1 + level, 14)}
 		<d-comment
-			style:--depth={depth}
+			style:--level={level}
 			style:--indent={indent}
-			style:--depth-color={DEPTH_COLORS[colorIndex]}
+			style:--level-color={LEVEL_COLORS[colorIndex]}
 			style:--bar-width="{barWidth}px"
-			class:top-level={depth === 0}
+			class:top-level={level === 1}
 			class:op={isOp}
 			class:deleted={isDeleted && !isDead}
 			class:dead={isDead}
 			class:new-comment={isNew}
 			data-lod={getLOD(comment.id)}
-			data-level={treeIndex.levelOf.get(comment.id)}
+			data-level={level}
+			data-index-level={treeIndex.levelOf.get(comment.id)}
 		>
 			<d-comment-meta>
-				{#if depth > 0}
-					<s-depth style:color={DEPTH_COLORS[colorIndex]}>{depth}</s-depth>
-				{/if}
+				<s-level style:color={LEVEL_COLORS[colorIndex]}>{level - 1}</s-level>
 				{#if isDead}
 					<a href="https://news.ycombinator.com/item?id={comment.id}" class="dead-link">[dead]</a>
 					{#if comment.user}
@@ -236,7 +235,7 @@
 			{/if}
 		</d-comment>
 		{#if comment.comments.length > 0}
-			{@render commentTree(comment.comments, depth + 1)}
+			{@render commentTree(comment.comments, level + 1)}
 		{/if}
 	{/each}
 {/snippet}
@@ -312,7 +311,7 @@
 
 	{#if item.comments.length > 0}
 		<d-comments>
-			{@render commentTree(item.comments, 0)}
+			{@render commentTree(item.comments, 1)}
 		</d-comments>
 	{:else}
 		<d-empty>No comments.</d-empty>
@@ -617,7 +616,7 @@
 			calc(var(--size-3) * var(--indent, 0) + var(--size-2));
 		border-top: 1px solid light-dark(#e6e6df, #3a3a3a);
 		border-left: var(--bar-width, 0px) solid
-			color-mix(in srgb, var(--depth-color, transparent) 70%, transparent);
+			color-mix(in srgb, var(--level-color, transparent) 70%, transparent);
 		background: light-dark(#ffffff, #262626);
 		overflow: hidden;
 
@@ -645,7 +644,7 @@
 		}
 	}
 
-	s-depth {
+	s-level {
 		display: inline-block;
 		margin-right: 0.25ch;
 		font-weight: var(--font-weight-6);
