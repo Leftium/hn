@@ -22,13 +22,13 @@ Goals:
 ## Terminology
 
 - **Tree**: post + comments form a tree
-- **Post**: root node at level 0 (always rendered L; participates in selectors so post-level UI can manipulate children)
-- **Level**: depth from post. Direct children of post are level 1, their replies level 2, etc.
+- **Post**: root node at level 0. Always rendered as the story header (not a comment row). It participates in selectors as a parent of top-level comments; any LOD entry in `lodState` for the post is ignored by the renderer.
+- **Level**: distance from post. Post is level 0, its direct children are level 1, their replies level 2, etc.
 - **LOD** (Level of Detail): how a comment renders
   - **L** (Large): multiline, full text — default
   - **M** (Medium): single line, ellipsis-truncated
-  - **S** (Small): colored block only (depth-indicating), consecutive S siblings at same depth group horizontally into a strip
-- **Render order**: strict depth-first pre-order traversal. LOD NEVER reorders.
+  - **S** (Small): colored block only (level-indicating), consecutive S siblings at the same level group horizontally into a strip
+- **Render order**: strict depth-first pre-order traversal of the tree. LOD NEVER reorders.
 
 ## State model
 
@@ -49,6 +49,21 @@ function getLOD(id: number): 'L' | 'M' | 'S' {
 	return lodState.get(id) ?? 'L';
 }
 ```
+
+## Tree index
+
+A `$derived` index over `item.comments`, rebuilt when the item changes. Selectors and the default-state initializer read from this index; they never walk the raw tree.
+
+```ts
+interface TreeIndex {
+	parentOf: Map<number, number>; // comment id → parent id (post id for top-level)
+	childrenOf: Map<number, number[]>; // comment id (or post id) → visible child ids in tree order
+	levelOf: Map<number, number>; // post id → 0, top-level → 1, etc.
+	allIds: number[]; // every visible comment id in depth-first pre-order (excludes post)
+}
+```
+
+"Visible" matches the current `isHiddenComment` filter: dead comments are included (they render as `[dead]`); deleted/hidden leaves are excluded. The index reflects exactly what the renderer draws.
 
 ## Primitives
 
@@ -137,14 +152,20 @@ Post is always rendered as the story header, not a comment row. Its LOD entry in
 
 ## Implementation phases
 
-### Phase 1: Legacy code quarantine
+### Phase 1: Remove legacy implementation ✅
 
-- Comment out in `src/routes/i/[id]/+page.svelte`:
-  - State: `collapsedIds`, `microCollapsedIds`, `autoGroupedIds`, `threadChildIds`, `parentMap`, `childrenMap`
-  - Functions: `toggleComment`, `buildCommentMaps`, `buildMicroBlocks`, expand/collapse-all handlers
-  - Template branches for collapsed / micro-collapsed / partial-micro
-- Wrap with `// LEGACY-LOD: <description>` markers for easy grep/removal later
-- Keep imports / types still referenced elsewhere
+Completed via revert rather than quarantine. The old collapse / micro-collapse implementation was removed by resetting `src/routes/i/[id]/+page.svelte` to its pre-collapsing state (commit `09d4a22`).
+
+Reference implementation remains accessible in git history:
+
+- `f5f2362` — initial collapse feature
+- `464c9f8` — animated collapse with scroll anchoring
+- `0aa129f` — micro-collapsed color strip
+- `a39ddc7` — decoupled micro-toggle + 3-state cycling
+- `228a02e` — expand/collapse-all button
+- `284b873` — auto-group non-thread siblings
+
+Rationale: the legacy logic was ~700 lines entangled across state, template, and CSS. Commenting it out would have added more noise than value; git history is a cleaner reference.
 
 ### Phase 2: Baseline (all L)
 
@@ -174,14 +195,16 @@ On item load:
 
 ```ts
 setLOD(
-	allComments().filter((c) => depthOf(c) === 2),
+	allComments().filter((id) => levelOf(id) === 2),
 	'M'
 );
 setLOD(
-	allComments().filter((c) => depthOf(c) >= 3),
+	allComments().filter((id) => levelOf(id) >= 3),
 	'S'
 );
 ```
+
+Where `levelOf(id)` reads from the tree index. `allComments()` returns ids (not HnpwaItem objects) — all selectors deal in ids.
 
 Predicate filtering uses native `Array.prototype.filter` on selector output — no predicate API needed in the primitives layer.
 
