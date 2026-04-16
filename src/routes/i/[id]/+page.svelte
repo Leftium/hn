@@ -9,6 +9,7 @@
 		isHiddenComment
 	} from '$lib/item-view-history';
 	import { resolve } from '$app/paths';
+	import { page } from '$app/state';
 	import { onMount } from 'svelte';
 	import { SvelteMap } from 'svelte/reactivity';
 	import 'open-props/style';
@@ -150,6 +151,78 @@
 		return treeIndex.allIds;
 	}
 
+	// --- S-grouping toggle (dev) ---
+	// Default true; disable with ?group=0 in the URL to render each S row
+	// individually (no horizontal merging). See spec §Rendering > S-grouping toggle.
+	const sGroupingEnabled = $derived(page.url.searchParams.get('group') !== '0');
+
+	// --- Flat render list ---
+	// Walks item.comments in pre-order producing an ordered list of render
+	// items. Consecutive same-level S rows (by LOD) are merged into a strip
+	// unless sGroupingEnabled is false. Interruption rules (strict pre-order):
+	// any non-S row, or any S row at a different level, ends the current strip.
+	interface RowItem {
+		kind: 'row';
+		id: number;
+		level: number;
+		comment: HnpwaItem;
+	}
+	interface StripItem {
+		kind: 'strip';
+		level: number;
+		ids: number[];
+		comments: HnpwaItem[];
+	}
+	type RenderItem = RowItem | StripItem;
+
+	const renderList = $derived.by<RenderItem[]>(() => {
+		// First pass: flatten tree into a row list (pre-order, filtered).
+		const rows: RowItem[] = [];
+		function walk(comments: HnpwaItem[], level: number) {
+			for (const c of comments) {
+				if (isHiddenComment(c)) continue;
+				rows.push({ kind: 'row', id: c.id, level, comment: c });
+				if (c.comments.length > 0) walk(c.comments, level + 1);
+			}
+		}
+		walk(item.comments, 1);
+
+		// Second pass: merge adjacent same-level S runs into strips.
+		if (!sGroupingEnabled) return rows;
+
+		const result: RenderItem[] = [];
+		let run: RowItem[] = [];
+		const flushRun = () => {
+			if (run.length === 0) return;
+			if (run.length === 1) {
+				result.push(run[0]);
+			} else {
+				result.push({
+					kind: 'strip',
+					level: run[0].level,
+					ids: run.map((r) => r.id),
+					comments: run.map((r) => r.comment)
+				});
+			}
+			run = [];
+		};
+		for (const row of rows) {
+			const isS = getLOD(row.id) === 'S';
+			if (isS && (run.length === 0 || run[0].level === row.level)) {
+				run.push(row);
+			} else {
+				flushRun();
+				if (isS) {
+					run.push(row);
+				} else {
+					result.push(row);
+				}
+			}
+		}
+		flushRun();
+		return result;
+	});
+
 	// New-comment tracking: threshold is the viewedAt from the previous visit.
 	// null = first visit (no highlights). Set on mount from IndexedDB.
 	let newCommentThreshold = $state<number | null>(null);
@@ -270,64 +343,90 @@
 	</svg>
 {/snippet}
 
-{#snippet commentTree(comments: HnpwaItem[], level: number)}
-	{#each comments.filter((c) => !isHiddenComment(c)) as comment (comment.id)}
-		{@const isDead = comment.content === '<p>[dead]'}
-		{@const isDeleted = !comment.user}
-		{@const isOp = !isDead && !!comment.user && comment.user === item.user}
-		{@const isNew = newCommentThreshold !== null && comment.time > newCommentThreshold}
-		{@const indent = Math.min(level - 1, MAX_INDENT)}
-		{@const colorIndex = (level - 1) % LEVEL_COLORS.length}
-		{@const barWidth = level === 1 ? 0 : Math.min(1 + level, 14)}
-		<d-comment
-			style:--level={level}
-			style:--indent={indent}
-			style:--level-color={LEVEL_COLORS[colorIndex]}
-			style:--bar-width="{barWidth}px"
-			class:top-level={level === 1}
-			class:op={isOp}
-			class:deleted={isDeleted && !isDead}
-			class:dead={isDead}
-			class:new-comment={isNew}
-			data-lod={getLOD(comment.id)}
-			data-level={level}
-			data-index-level={treeIndex.levelOf.get(comment.id)}
-		>
-			{#if comment.content && !isDead}
-				<d-comment-body>
-					{@html comment.content}
-				</d-comment-body>
-			{/if}
-			<d-comment-meta>
-				<s-level style:color={LEVEL_COLORS[colorIndex]}>{level - 1}</s-level>
-				{#if isDead}
-					<a href="https://news.ycombinator.com/item?id={comment.id}" class="dead-link">[dead]</a>
-					{#if comment.user}
-						<a href="https://news.ycombinator.com/user?id={comment.user}" class="dead-link">
-							{comment.user}
-						</a>
-					{/if}
-					<s-time>{relativeTime(comment.time)}</s-time>
-				{:else if isDeleted}
-					<s-author class="deleted">[deleted]</s-author>
-				{:else}
-					<a href="https://news.ycombinator.com/user?id={comment.user}" class="author-link">
-						<s-author>{comment.user}</s-author>
-					</a>
-					{#if isOp}
-						<s-op-badge>OP</s-op-badge>
-					{/if}
-					{#if isNew}
-						<s-new-badge>NEW</s-new-badge>
-					{/if}
-					<s-time>{relativeTime(comment.time)}</s-time>
-				{/if}
-			</d-comment-meta>
-		</d-comment>
-		{#if comment.comments.length > 0}
-			{@render commentTree(comment.comments, level + 1)}
+{#snippet commentRow(comment: HnpwaItem, level: number)}
+	{@const lod = getLOD(comment.id)}
+	{@const isDead = comment.content === '<p>[dead]'}
+	{@const isDeleted = !comment.user}
+	{@const isOp = !isDead && !!comment.user && comment.user === item.user}
+	{@const isNew = newCommentThreshold !== null && comment.time > newCommentThreshold}
+	{@const indent = Math.min(level - 1, MAX_INDENT)}
+	{@const colorIndex = (level - 1) % LEVEL_COLORS.length}
+	{@const barWidth = level === 1 ? 0 : Math.min(1 + level, 14)}
+	<d-comment
+		style:--level={level}
+		style:--indent={indent}
+		style:--level-color={LEVEL_COLORS[colorIndex]}
+		style:--bar-width="{barWidth}px"
+		class:top-level={level === 1}
+		class:op={isOp}
+		class:deleted={isDeleted && !isDead}
+		class:dead={isDead}
+		class:new-comment={isNew}
+		data-lod={lod}
+		data-level={level}
+		data-index-level={treeIndex.levelOf.get(comment.id)}
+	>
+		{#if lod === 'S'}
+			<!-- Ungrouped S row: tiny colored block placeholder, click to cycle -->
+			<button
+				type="button"
+				class="s-solo"
+				aria-label="cycle LOD for comment {comment.id}"
+				onclick={() => toggleLOD(comment.id)}
+			></button>
+		{:else if comment.content && !isDead}
+			<d-comment-body>
+				{@html comment.content}
+			</d-comment-body>
 		{/if}
-	{/each}
+		<d-comment-meta>
+			<s-level style:color={LEVEL_COLORS[colorIndex]}>{level - 1}</s-level>
+			{#if isDead}
+				<a href="https://news.ycombinator.com/item?id={comment.id}" class="dead-link">[dead]</a>
+				{#if comment.user}
+					<a href="https://news.ycombinator.com/user?id={comment.user}" class="dead-link">
+						{comment.user}
+					</a>
+				{/if}
+				<s-time>{relativeTime(comment.time)}</s-time>
+			{:else if isDeleted}
+				<s-author class="deleted">[deleted]</s-author>
+			{:else}
+				<a href="https://news.ycombinator.com/user?id={comment.user}" class="author-link">
+					<s-author>{comment.user}</s-author>
+				</a>
+				{#if isOp}
+					<s-op-badge>OP</s-op-badge>
+				{/if}
+				{#if isNew}
+					<s-new-badge>NEW</s-new-badge>
+				{/if}
+				<s-time>{relativeTime(comment.time)}</s-time>
+			{/if}
+		</d-comment-meta>
+	</d-comment>
+{/snippet}
+
+{#snippet stripRow(strip: StripItem)}
+	{@const indent = Math.min(strip.level - 1, MAX_INDENT)}
+	{@const colorIndex = (strip.level - 1) % LEVEL_COLORS.length}
+	<d-comment-strip
+		style:--level={strip.level}
+		style:--indent={indent}
+		style:--level-color={LEVEL_COLORS[colorIndex]}
+		data-level={strip.level}
+		data-strip-size={strip.ids.length}
+	>
+		{#each strip.ids as id (id)}
+			<button
+				type="button"
+				class="strip-seg"
+				aria-label="cycle LOD for comment {id}"
+				title="cycle LOD for #{id}"
+				onclick={() => toggleLOD(id)}
+			></button>
+		{/each}
+	</d-comment-strip>
 {/snippet}
 
 <svelte:head>
@@ -401,7 +500,13 @@
 
 	{#if item.comments.length > 0}
 		<d-comments>
-			{@render commentTree(item.comments, 1)}
+			{#each renderList as renderItem (renderItem.kind === 'row' ? `r-${renderItem.id}` : `s-${renderItem.ids[0]}`)}
+				{#if renderItem.kind === 'row'}
+					{@render commentRow(renderItem.comment, renderItem.level)}
+				{:else}
+					{@render stripRow(renderItem)}
+				{/if}
+			{/each}
 		</d-comments>
 	{:else}
 		<d-empty>No comments.</d-empty>
@@ -900,6 +1005,61 @@
 
 		br {
 			display: none;
+		}
+	}
+
+	/* --- S render mode (ungrouped solo) ---
+	   When sGroupingEnabled is false, each S comment renders as its own row
+	   with a tiny colored block in place of the body. */
+	d-comment[data-lod='S'] {
+		padding-top: var(--size-1);
+		padding-bottom: var(--size-1);
+	}
+
+	button.s-solo {
+		display: block;
+		height: 0.75em;
+		width: 4ch;
+		padding: 0;
+		background: var(--level-color, #888);
+		opacity: 0.6;
+		border: 0;
+		border-radius: 2px;
+		cursor: pointer;
+		transition: opacity 0.15s ease;
+
+		&:hover {
+			opacity: 1;
+		}
+	}
+
+	/* --- S render mode (grouped strip) ---
+	   A horizontal row divided into equal-width clickable segments,
+	   one per S id. Uses the same indent/level-color as a regular row. */
+	d-comment-strip {
+		display: flex;
+		gap: 1px;
+		padding: var(--size-1) var(--size-2) var(--size-1)
+			calc(var(--size-3) * var(--indent, 0) + var(--size-2));
+		background: light-dark(#ffffff, #262626);
+		border-top: 1px solid light-dark(#e6e6df, #3a3a3a);
+	}
+
+	button.strip-seg {
+		display: block;
+		flex: 1 1 0;
+		height: 0.75em;
+		padding: 0;
+		background: var(--level-color, #888);
+		opacity: 0.6;
+		border: 0;
+		border-radius: 2px;
+		cursor: pointer;
+		min-width: 0.5ch;
+		transition: opacity 0.15s ease;
+
+		&:hover {
+			opacity: 1;
 		}
 	}
 
