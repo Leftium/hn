@@ -44,9 +44,9 @@
 	// Default: all depth > 0 comments start collapsed.
 	let collapsedIds = $state(new Set<number>());
 
-	// Micro-collapse state: Set of depth-1 comment IDs whose depth-2+ subtrees
-	// are rendered as a 2px color strip instead of individual collapsed lines.
-	// Default: all depth-1 comments that have depth-2+ descendants.
+	// Micro-collapse state: Set of comment IDs whose descendant subtrees
+	// are rendered as a 4px color strip instead of individual collapsed lines.
+	// Default: all comments that have visible grandchildren (depth-2+ descendants).
 	let microCollapsedIds = $state(new Set<number>());
 
 	// Parent map: child ID → parent ID (for ancestor expansion)
@@ -64,8 +64,9 @@
 		for (const c of comments) {
 			if (depth > 0) collapsed.add(c.id);
 			if (parentId !== null) parents.set(c.id, parentId);
-			// Depth-1 comments with any depth-2+ visible descendants get micro-collapsed
-			if (depth === 1 && hasVisibleChildren(c)) {
+			// Non-root comments with visible grandchildren get micro-collapsed by default.
+			// Depth-0 comments keep their children as individual collapsed lines for navigation.
+			if (depth > 0 && hasVisibleGrandchildren(c)) {
 				microCollapsed.add(c.id);
 			}
 			if (c.comments?.length)
@@ -73,15 +74,34 @@
 		}
 	}
 
-	/** Check if a comment has any visible children */
-	function hasVisibleChildren(comment: HnpwaItem): boolean {
-		return comment.comments?.some((c) => !isHiddenComment(c)) ?? false;
+	/** Check if a comment has any visible grandchildren (children who themselves have visible children) */
+	function hasVisibleGrandchildren(comment: HnpwaItem): boolean {
+		return (
+			comment.comments?.some(
+				(c) => !isHiddenComment(c) && c.comments?.some((gc) => !isHiddenComment(gc))
+			) ?? false
+		);
 	}
 
-	/** Check if a comment is at depth 1 (parent exists but grandparent doesn't) */
-	function isDepthOne(id: number): boolean {
-		const parentId = parentMap.get(id);
-		return parentId !== undefined && !parentMap.has(parentId);
+	/** Count all visible descendants of a comment (recursive) */
+	function countVisibleDescendants(comments: HnpwaItem[]): number {
+		let count = 0;
+		for (const c of comments) {
+			if (isHiddenComment(c)) continue;
+			count++;
+			if (c.comments?.length) count += countVisibleDescendants(c.comments);
+		}
+		return count;
+	}
+
+	/** Collect IDs of all visible descendants that have visible grandchildren (micro-eligible) */
+	function collectEligibleDescendantIds(comments: HnpwaItem[], out: number[]) {
+		for (const c of comments) {
+			if (isHiddenComment(c)) continue;
+			if (hasVisibleGrandchildren(c)) out.push(c.id);
+			if (c.comments?.length) collectEligibleDescendantIds(c.comments, out);
+		}
+		return out;
 	}
 
 	// Re-initialize collapsed set, parent map, and micro-collapsed set whenever item changes
@@ -124,9 +144,14 @@
 	 * Build an array of color blocks for the micro-collapsed strip.
 	 * Each descendant gets a block colored by its depth.
 	 * Width matches the depth's left border width: Math.min(2 + depth, 14)px.
+	 * @param comments — children of the comment being micro-collapsed
+	 * @param baseDepth — the depth of those children (parent depth + 1)
 	 */
-	function buildMicroBlocks(comments: HnpwaItem[]): Array<{ color: string; width: number }> {
-		const depths = collectDescendantDepths(comments, 2, []);
+	function buildMicroBlocks(
+		comments: HnpwaItem[],
+		baseDepth: number
+	): Array<{ color: string; width: number }> {
+		const depths = collectDescendantDepths(comments, baseDepth, []);
 		return depths.map((d) => ({
 			color: DEPTH_COLORS[d % DEPTH_COLORS.length],
 			width: Math.min(2 + d, 14)
@@ -159,12 +184,18 @@
 				if (next.delete(ancestorId)) changed.add(ancestorId);
 				ancestorId = parentMap.get(ancestorId);
 			}
-			// Expand direct children — but only if they're not behind a micro-collapsed strip
-			if (!microCollapsedIds.has(comment.id)) {
-				for (const id of childIds) {
-					if (next.delete(id)) changed.add(id);
-				}
+			// Also expand direct children
+			for (const id of childIds) {
+				if (next.delete(id)) changed.add(id);
 			}
+			// Disable micro-collapse on self AND direct children so their
+			// subtrees render normally (not hidden behind strips)
+			const nextMicro = new Set(microCollapsedIds);
+			nextMicro.delete(comment.id);
+			for (const id of childIds) {
+				nextMicro.delete(id);
+			}
+			microCollapsedIds = nextMicro;
 		} else if (childIds.length === 0) {
 			// Expanded leaf: collapse self + all ancestors at depth >= 1
 			if (!next.has(comment.id)) changed.add(comment.id);
@@ -179,25 +210,25 @@
 				ancestorId = parentMap.get(ancestorId);
 			}
 		} else {
-			// Already expanded with children: toggle children
+			// Already expanded with children: toggle direct children only
 			const anyChildCollapsed = childIds.some((id) => next.has(id));
 			if (anyChildCollapsed) {
 				// Some children collapsed → expand all direct children
 				for (const id of childIds) {
 					if (next.delete(id)) changed.add(id);
 				}
+				// Disable micro-collapse on self AND children so their subtrees render
+				const nextMicro = new Set(microCollapsedIds);
+				nextMicro.delete(comment.id);
+				for (const id of childIds) {
+					nextMicro.delete(id);
+				}
+				microCollapsedIds = nextMicro;
 			} else {
-				// All children expanded → collapse entire subtree
-				const allDescendants = collectDescendantIds(comment.comments, []);
-				for (const id of allDescendants) {
+				// All children expanded → collapse direct children
+				for (const id of childIds) {
 					if (!next.has(id)) changed.add(id);
 					next.add(id);
-				}
-				// Re-engage micro-collapse for depth-1 comments with deep descendants
-				if (isDepthOne(comment.id) && hasVisibleChildren(comment)) {
-					const nextMicro = new Set(microCollapsedIds);
-					nextMicro.add(comment.id);
-					microCollapsedIds = nextMicro;
 				}
 			}
 		}
@@ -312,6 +343,8 @@
 		{@const barWidth = depth === 0 ? 0 : Math.min(2 + depth, 14)}
 		{@const isCollapsed = collapsedIds.has(comment.id)}
 		{@const hasChildren = comment.comments.filter((c) => !isHiddenComment(c)).length > 0}
+		{@const hasGrandchildren = hasVisibleGrandchildren(comment)}
+		{@const descendantCount = hasChildren ? countVisibleDescendants(comment.comments) : 0}
 		<!-- svelte-ignore a11y_no_static_element_interactions -->
 		<d-comment
 			data-comment-id={comment.id}
@@ -413,6 +446,69 @@
 					{/if}
 					<s-time>{relativeTime(comment.time)}</s-time>
 				{/if}
+				{#if !isCollapsed && hasGrandchildren}
+					{@const eligibleChildIds = comment.comments
+						.filter((c) => !isHiddenComment(c) && hasVisibleGrandchildren(c))
+						.map((c) => c.id)}
+					{@const allEligibleIds = collectEligibleDescendantIds(comment.comments, [])}
+					{@const childrenGrouped = eligibleChildIds.some((id) => microCollapsedIds.has(id))}
+					{@const deeperGrouped = allEligibleIds.some(
+						(id) => !eligibleChildIds.includes(id) && microCollapsedIds.has(id)
+					)}
+					{@const groupLabel = childrenGrouped
+						? 'grouped'
+						: deeperGrouped
+							? 'partially grouped'
+							: 'ungrouped'}
+					<!-- svelte-ignore a11y_no_static_element_interactions -->
+					<s-micro-toggle
+						class:grouped={childrenGrouped}
+						class:partial={!childrenGrouped && deeperGrouped}
+						onclick={async (e: MouseEvent) => {
+							e.stopPropagation();
+							const commentEl = document.querySelector<HTMLElement>(
+								`[data-comment-id="${comment.id}"]`
+							);
+							if (!commentEl) return;
+							const rectBefore = commentEl.getBoundingClientRect();
+
+							const nextMicro = new Set(microCollapsedIds);
+
+							if (childrenGrouped) {
+								// State: children grouped → ungroup direct children only
+								for (const id of eligibleChildIds) {
+									nextMicro.delete(id);
+								}
+							} else if (deeperGrouped) {
+								// State: children ungrouped, deeper still grouped → ungroup all
+								for (const id of allEligibleIds) {
+									nextMicro.delete(id);
+								}
+							} else {
+								// State: all ungrouped → group all descendants;
+								// also collapse their subtrees so strips are accurate
+								const nextCollapsed = new Set(collapsedIds);
+								for (const id of allEligibleIds) {
+									nextMicro.add(id);
+								}
+								const allDescendants = collectDescendantIds(comment.comments, []);
+								for (const id of allDescendants) {
+									nextCollapsed.add(id);
+								}
+								collapsedIds = nextCollapsed;
+							}
+							microCollapsedIds = nextMicro;
+
+							await tick();
+
+							const rectAfter = commentEl.getBoundingClientRect();
+							const shift = rectAfter.top - rectBefore.top;
+							if (Math.abs(shift) > 1) {
+								window.scrollBy(0, shift);
+							}
+						}}>{descendantCount} replies: {groupLabel}</s-micro-toggle
+					>
+				{/if}
 			</d-comment-meta>
 			{#if isCollapsed && comment.content && !isDead}
 				<s-collapsed-preview>{stripHtml(comment.content)}</s-collapsed-preview>
@@ -424,13 +520,14 @@
 			{/if}
 		</d-comment>
 		{#if comment.comments.length > 0}
-			{#if depth === 1 && microCollapsedIds.has(comment.id)}
-				{@const blocks = buildMicroBlocks(comment.comments)}
+			{#if microCollapsedIds.has(comment.id)}
+				{@const blocks = buildMicroBlocks(comment.comments, depth + 1)}
 				{#if blocks.length > 0}
 					<!-- svelte-ignore a11y_no_static_element_interactions -->
 					<d-micro-collapsed
 						data-micro-id={comment.id}
 						onclick={async (e: MouseEvent) => {
+							e.stopPropagation();
 							const stripEl = e.currentTarget as HTMLElement;
 							const parentEl = document.querySelector<HTMLElement>(
 								`[data-comment-id="${comment.id}"]`
@@ -1020,6 +1117,46 @@
 
 	d-comment-meta s-time {
 		font-variant-numeric: tabular-nums;
+	}
+
+	s-micro-toggle {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.25ch;
+		margin-left: auto;
+		padding: 0 0.5ch;
+		font-size: 0.8em;
+		font-variant-numeric: tabular-nums;
+		color: light-dark(#999, #666);
+		border-radius: 3px;
+		cursor: pointer;
+		user-select: none;
+		transition: all 0.15s ease;
+		background: light-dark(rgba(0, 0, 0, 0.04), rgba(255, 255, 255, 0.04));
+		white-space: nowrap;
+
+		&:hover {
+			color: light-dark(#555, #bbb);
+			background: light-dark(rgba(0, 0, 0, 0.08), rgba(255, 255, 255, 0.1));
+		}
+
+		&.grouped {
+			color: light-dark(#666, #999);
+			background: light-dark(rgba(74, 158, 218, 0.12), rgba(74, 158, 218, 0.18));
+		}
+
+		&.grouped:hover {
+			background: light-dark(rgba(74, 158, 218, 0.2), rgba(74, 158, 218, 0.25));
+		}
+
+		&.partial {
+			color: light-dark(#777, #888);
+			background: light-dark(rgba(74, 158, 218, 0.06), rgba(74, 158, 218, 0.1));
+		}
+
+		&.partial:hover {
+			background: light-dark(rgba(74, 158, 218, 0.12), rgba(74, 158, 218, 0.18));
+		}
 	}
 
 	d-comment-meta s-author.deleted {
