@@ -195,25 +195,104 @@
 		return treeIndex.allIds;
 	}
 
-	// --- Phase 4: default initial LOD state by level ---
-	// Runs on mount and whenever item.id changes (story navigation). Resets any
-	// prior entries so manual cycling from a previous story doesn't leak across.
-	// Single walk: bucket by level, apply M to level 2, S to level ≥ 3.
-	// Level 1 is left implicit (default L). Empty trees no-op cleanly.
+	// allStripMembers: every comment currently resolved to 'S'. Used by A2
+	// (Ungroup all) to know which ids to promote to M. Reads lodState directly
+	// rather than renderList so it works regardless of grouping/rendering.
+	function allStripMembers(): number[] {
+		const result: number[] = [];
+		for (const id of treeIndex.allIds) if (getLOD(id) === 'S') result.push(id);
+		return result;
+	}
+
+	// --- Phase 5.1: forward-policy override flag ---
+	// When true, default LOD policy yields 'M' (not 'S') for level ≥ 3.
+	// Toggled by A2 (Ungroup all). Cleared on A1 toggle (either direction) and
+	// on A2 deactivation. Forward-only: existing lodState entries are not
+	// retroactively rewritten here; A1/A2 handlers call applyDefaultPolicy()
+	// after flipping this flag when they want a reset.
+	let ungroupAllFlag = $state(false);
+
+	// --- Phase 4/5: default initial LOD state by level ---
+	// Bucket by level and apply default LOD: L for level 1, M for level 2,
+	// and S (or M when ungroup is true) for level ≥ 3. Does NOT clear
+	// lodState on its own — callers clear first when they want a reset.
+	// Scope: when ids is provided, only those ids receive default policy
+	// (used by B3 Ungroup subtree's "re-run within scope" path).
+	//
+	// NOTE: takes `ungroup` as an explicit parameter rather than reading
+	// ungroupAllFlag directly, so callers inside $effect don't inadvertently
+	// subscribe the effect to the flag (which would cause the effect to
+	// re-run when A2 flips the flag, clobbering the handler's writes).
+	function applyDefaultPolicy(ungroup: boolean, ids?: Iterable<number>): void {
+		const target = ids ?? treeIndex.allIds;
+		const L: number[] = [];
+		const M: number[] = [];
+		const S: number[] = [];
+		for (const id of target) {
+			const lv = treeIndex.levelOf.get(id) ?? 0;
+			if (lv <= 1) L.push(id);
+			else if (lv === 2) M.push(id);
+			else if (ungroup) M.push(id);
+			else S.push(id);
+		}
+		setLOD(L, 'L');
+		setLOD(M, 'M');
+		setLOD(S, 'S');
+	}
+
+	// Runs on mount and whenever item.id changes (story navigation). Resets
+	// any prior entries so manual cycling from a previous story doesn't leak
+	// across. ungroupAllFlag also resets per-item for consistent defaults.
+	// We pass `false` explicitly (rather than reading ungroupAllFlag) so the
+	// effect never subscribes to flag changes — otherwise flipping A2 would
+	// re-trigger this effect and clobber the handler's writes.
 	$effect(() => {
 		void item.id; // track item changes
 		lodState.clear();
 		highlightedIds.clear();
-		const M: number[] = [];
-		const S: number[] = [];
-		for (const id of treeIndex.allIds) {
-			const lv = treeIndex.levelOf.get(id) ?? 0;
-			if (lv === 2) M.push(id);
-			else if (lv >= 3) S.push(id);
-		}
-		setLOD(M, 'M');
-		setLOD(S, 'S');
+		ungroupAllFlag = false;
+		applyDefaultPolicy(false);
 	});
+
+	// --- Phase 5.1: global toolbar active-states + handlers ---
+	// Heuristic toggles: active-state is derived from lodState, not stored.
+	// A1 active ≡ every comment at L. A2 active ≡ flag set AND no S exists
+	// (the flag alone isn't enough — if the user has since manually
+	// introduced an S somewhere, A2 should read as inactive).
+	const allLActive = $derived.by(() => {
+		const ids = treeIndex.allIds;
+		if (ids.length === 0) return false;
+		for (const id of ids) if (getLOD(id) !== 'L') return false;
+		return true;
+	});
+	const ungroupAllActive = $derived.by(() => {
+		if (!ungroupAllFlag) return false;
+		for (const id of treeIndex.allIds) if (getLOD(id) === 'S') return false;
+		return true;
+	});
+
+	// A1 — Expand all. Toggle. Always clears ungroupAllFlag (view reset).
+	function onExpandAll(): void {
+		ungroupAllFlag = false;
+		if (allLActive) {
+			lodState.clear();
+			applyDefaultPolicy(false);
+		} else {
+			setLOD(allComments(), 'L');
+		}
+	}
+
+	// A2 — Ungroup all. Toggle + forward-policy override.
+	function onUngroupAll(): void {
+		if (ungroupAllActive) {
+			ungroupAllFlag = false;
+			lodState.clear();
+			applyDefaultPolicy(false);
+		} else {
+			ungroupAllFlag = true;
+			setLOD(allStripMembers(), 'M');
+		}
+	}
 
 	// --- S-grouping toggle (dev) ---
 	// Default true; disable with ?group=0 in the URL to render each S row
@@ -594,6 +673,29 @@
 	<d-header>
 		<d-nav>
 			<button type="button" class="back-btn" onclick={goBack}> ← Back </button>
+			<d-lod-toolbar>
+				<button
+					type="button"
+					class="lod-toolbar-btn"
+					class:active={allLActive}
+					aria-pressed={allLActive}
+					title="Expand all comments to full detail"
+					onclick={onExpandAll}
+				>
+					Expand all
+				</button>
+				<button
+					type="button"
+					class="lod-toolbar-btn"
+					class:active={ungroupAllActive}
+					aria-pressed={ungroupAllActive}
+					disabled={allLActive}
+					title="Show every comment (no grouped strips)"
+					onclick={onUngroupAll}
+				>
+					Ungroup all
+				</button>
+			</d-lod-toolbar>
 		</d-nav>
 
 		<d-item-header>
@@ -687,6 +789,9 @@
 
 	d-nav {
 		display: flex;
+		align-items: center;
+		gap: var(--size-2);
+		flex-wrap: wrap;
 		padding: var(--size-2);
 		border-bottom: 1px solid light-dark(#e6e6df, #3a3a3a);
 	}
@@ -705,6 +810,45 @@
 			background: light-dark(#e0e0e0, #333);
 			border-color: light-dark(#999, #666);
 			color: light-dark(#333, #ccc);
+		}
+	}
+
+	d-lod-toolbar {
+		display: inline-flex;
+		gap: var(--size-1);
+	}
+
+	.lod-toolbar-btn {
+		padding: var(--size-1) var(--size-2);
+		font-size: var(--font-size-1);
+		background: light-dark(#f5f5f5, #2a2a2a);
+		border: 1px solid light-dark(#ccc, #444);
+		border-radius: 4px;
+		cursor: pointer;
+		color: light-dark(#666, #999);
+		transition: all 0.15s ease;
+
+		&:hover:not(:disabled) {
+			background: light-dark(#e0e0e0, #333);
+			border-color: light-dark(#999, #666);
+			color: light-dark(#333, #ccc);
+		}
+
+		&.active {
+			background: #ff6600;
+			border-color: #ff6600;
+			color: #fff;
+
+			&:hover:not(:disabled) {
+				background: light-dark(#e55800, #ff7a1a);
+				border-color: light-dark(#e55800, #ff7a1a);
+				color: #fff;
+			}
+		}
+
+		&:disabled {
+			opacity: 0.4;
+			cursor: not-allowed;
 		}
 	}
 
