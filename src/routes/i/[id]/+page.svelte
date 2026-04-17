@@ -195,6 +195,12 @@
 		return treeIndex.allIds;
 	}
 
+	// directChildrenOf: spec-named alias of childrenOf for Phase 5.2 B1.
+	// Semantically identical — immediate children, no recursion.
+	function directChildrenOf(id: number): number[] {
+		return childrenOf(id);
+	}
+
 	// allStripMembers: every comment currently resolved to 'S'. Used by A2
 	// (Ungroup all) to know which ids to promote to M. Reads lodState directly
 	// rather than renderList so it works regardless of grouping/rendering.
@@ -292,6 +298,83 @@
 			ungroupAllFlag = true;
 			setLOD(allStripMembers(), 'M');
 		}
+	}
+
+	// --- Phase 5.2: per-L row action predicates + handlers ---
+	// These are plain functions (not $derived) called from the commentRow
+	// snippet. SvelteMap reads via getLOD() make them reactive on render.
+	// Returns false for empty scopes so "active" doesn't misreport on leaves.
+	function repliesAllL(id: number): boolean {
+		const kids = directChildrenOf(id);
+		if (kids.length === 0) return false;
+		for (const k of kids) if (getLOD(k) !== 'L') return false;
+		return true;
+	}
+	function subtreeAllL(id: number): boolean {
+		const desc = descendantsOf(id);
+		if (desc.length === 0) return false;
+		for (const d of desc) if (getLOD(d) !== 'L') return false;
+		return true;
+	}
+	function subtreeNoS(id: number): boolean {
+		const desc = descendantsOf(id);
+		if (desc.length === 0) return false;
+		for (const d of desc) if (getLOD(d) === 'S') return false;
+		return true;
+	}
+	// B1 — Expand direct replies. Toggle L↔M on immediate children only.
+	function onExpandReplies(id: number): void {
+		const kids = directChildrenOf(id);
+		if (kids.length === 0) return;
+		const anyM = kids.some((k) => getLOD(k) === 'M');
+		setLOD(kids, anyM ? 'L' : 'M');
+	}
+
+	// B2 — Expand subtree. Toggle: if any descendant is M or S, promote
+	// all to L; otherwise (all-L) collapse back to default policy (which
+	// re-introduces strips at level ≥ 3). This way untoggling Expand
+	// subtree also untoggles Ungroup subtree — a single "reset this
+	// scope" gesture.
+	function onExpandSubtree(id: number): void {
+		const desc = descendantsOf(id);
+		if (desc.length === 0) return;
+		const anyNonL = desc.some((d) => getLOD(d) !== 'L');
+		if (anyNonL) setLOD(desc, 'L');
+		else applyDefaultPolicy(false, desc);
+	}
+
+	// B3 — Ungroup subtree. Toggle: if any descendant is S, promote those S
+	// to M; else re-apply default policy within the subtree (re-introducing
+	// strips per level ≥ 3). Per spec: no forward-policy override — this is
+	// a per-L, state-free action. New arrivals in the subtree follow default
+	// policy (may become S).
+	function onUngroupSubtree(id: number): void {
+		const desc = descendantsOf(id);
+		if (desc.length === 0) return;
+		const anyS = desc.some((d) => getLOD(d) === 'S');
+		if (anyS) {
+			// Promote only the S descendants to M; leave existing L/M alone.
+			const toPromote = desc.filter((d) => getLOD(d) === 'S');
+			setLOD(toPromote, 'M');
+		} else {
+			// Re-run default policy within the subtree (ungroup=false → strips
+			// reappear at level ≥ 3). Note: this overwrites any manual L/M
+			// edits inside the subtree — accepted as "reset the scope."
+			applyDefaultPolicy(false, desc);
+		}
+	}
+
+	// Keyboard handler for row click-toggle. Enter/Space activate L↔M.
+	// preventDefault on Space so it doesn't scroll the page.
+	function onRowKeydown(e: KeyboardEvent, id: number, lod: 'L' | 'M' | 'S'): void {
+		if (e.key !== 'Enter' && e.key !== ' ') return;
+		const t = e.target as HTMLElement | null;
+		if (t?.closest('a, button, input, textarea, [contenteditable]')) return;
+		e.preventDefault();
+		if (lod === 'L') setLOD([id], 'M');
+		else if (lod === 'M') setLOD([id], 'L');
+		else return;
+		setHighlight([id]);
 	}
 
 	// --- S-grouping toggle (dev) ---
@@ -504,12 +587,18 @@
 	{@const colorIndex = (level - 1) % LEVEL_COLORS.length}
 	{@const barWidth = level === 1 ? 0 : Math.min(1 + level, 14)}
 	<!--
-		Row click toggles LOD (L↔M). Keyboard/ARIA affordances are deferred
-		to Phase 5 which will establish the full production control scheme;
-		dev-UI buttons remain keyboard-accessible under ?dev=1 in the meantime.
+		Row click (and Enter/Space) toggles LOD (L↔M). We deliberately do NOT
+		add role="button" because nimble.css styles [role="button"] as a full
+		button (bg, padding, border-radius, text-align: center) and that
+		styling is impossible to opt out of without !important wrestling.
+		Instead: tabindex="0" + onkeydown is enough for keyboard access, and
+		per-L rows also expose explicit B1–B4 buttons that AT users can
+		target directly. The svelte-ignore comments below acknowledge this
+		tradeoff rather than the element being keyboard-inaccessible.
 	-->
 	<!-- svelte-ignore a11y_click_events_have_key_events -->
 	<!-- svelte-ignore a11y_no_static_element_interactions -->
+	<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
 	<d-comment
 		style:--level={level}
 		style:--indent={indent}
@@ -524,7 +613,9 @@
 		data-lod={lod}
 		data-level={level}
 		data-index-level={devUiEnabled ? treeIndex.levelOf.get(comment.id) : undefined}
+		tabindex={lod === 'S' ? undefined : 0}
 		onclick={(e: MouseEvent) => onRowClick(e, comment.id, lod)}
+		onkeydown={(e: KeyboardEvent) => onRowKeydown(e, comment.id, lod)}
 	>
 		{#if lod === 'S'}
 			<!-- Ungrouped S row (?group=0 dev path): colored block placeholder,
@@ -565,6 +656,58 @@
 						<s-new-badge>NEW</s-new-badge>
 					{/if}
 					<s-time>{relativeTime(comment.time)}</s-time>
+				{/if}
+				{#if lod === 'L'}
+					{@const hasKids = directChildrenOf(comment.id).length > 0}
+					{@const hasDesc = descendantsOf(comment.id).length > 0}
+					{@const b1Active = hasKids && repliesAllL(comment.id)}
+					{@const b2Active = hasDesc && subtreeAllL(comment.id)}
+					{@const b3Active = hasDesc && subtreeNoS(comment.id)}
+					<s-lod-actions>
+						<button
+							type="button"
+							class="lod-row-btn"
+							class:active={b1Active}
+							aria-pressed={b1Active}
+							aria-label="Expand direct replies"
+							disabled={!hasKids}
+							title="Expand/collapse direct replies"
+							onclick={(e) => {
+								e.stopPropagation();
+								onExpandReplies(comment.id);
+							}}
+						>
+							Expand&nbsp;<s-direct>direct&nbsp;</s-direct>replies
+						</button>
+						<button
+							type="button"
+							class="lod-row-btn"
+							class:active={b3Active}
+							aria-pressed={b3Active}
+							disabled={!hasDesc || allLActive}
+							title="Ungroup/regroup subtree strips"
+							onclick={(e) => {
+								e.stopPropagation();
+								onUngroupSubtree(comment.id);
+							}}
+						>
+							Ungroup
+						</button>
+						<button
+							type="button"
+							class="lod-row-btn"
+							class:active={b2Active}
+							aria-pressed={b2Active}
+							disabled={!hasDesc}
+							title="Expand/collapse entire subtree"
+							onclick={(e) => {
+								e.stopPropagation();
+								onExpandSubtree(comment.id);
+							}}
+						>
+							Expand
+						</button>
+					</s-lod-actions>
 				{/if}
 			</d-comment-meta>
 			{#if comment.content && !isDead}
@@ -677,16 +820,6 @@
 				<button
 					type="button"
 					class="lod-toolbar-btn"
-					class:active={allLActive}
-					aria-pressed={allLActive}
-					title="Expand all comments to full detail"
-					onclick={onExpandAll}
-				>
-					Expand all
-				</button>
-				<button
-					type="button"
-					class="lod-toolbar-btn"
 					class:active={ungroupAllActive}
 					aria-pressed={ungroupAllActive}
 					disabled={allLActive}
@@ -694,6 +827,16 @@
 					onclick={onUngroupAll}
 				>
 					Ungroup all
+				</button>
+				<button
+					type="button"
+					class="lod-toolbar-btn"
+					class:active={allLActive}
+					aria-pressed={allLActive}
+					title="Expand all comments to full detail"
+					onclick={onExpandAll}
+				>
+					Expand all
 				</button>
 			</d-lod-toolbar>
 		</d-nav>
@@ -816,6 +959,7 @@
 	d-lod-toolbar {
 		display: inline-flex;
 		gap: var(--size-1);
+		margin-inline-start: auto;
 	}
 
 	.lod-toolbar-btn {
@@ -835,20 +979,62 @@
 		}
 
 		&.active {
-			background: #ff6600;
-			border-color: #ff6600;
-			color: #fff;
-
-			&:hover:not(:disabled) {
-				background: light-dark(#e55800, #ff7a1a);
-				border-color: light-dark(#e55800, #ff7a1a);
-				color: #fff;
-			}
+			/* Active state: inset shadow instead of color change — conveys
+			   pressed-ness without introducing a new visual weight. */
+			box-shadow: inset 0 1px 3px light-dark(rgb(0 0 0 / 0.15), rgb(0 0 0 / 0.35));
+			border-color: light-dark(#999, #666);
 		}
 
 		&:disabled {
 			opacity: 0.4;
 			cursor: not-allowed;
+		}
+	}
+
+	/* Per-L row action buttons. Sit inline in <d-comment-meta> which has
+	   flex-wrap, so they'll wrap to a new line on narrow widths rather
+	   than overflow. Smaller and lighter than the global toolbar buttons
+	   since they repeat on every L row. */
+	s-lod-actions {
+		display: inline-flex;
+		flex-wrap: wrap;
+		gap: var(--size-1);
+		margin-inline-start: auto;
+	}
+
+	.lod-row-btn {
+		padding: 0 var(--size-2);
+		font-size: var(--font-size-0);
+		line-height: 1.6;
+		background: light-dark(#f5f5f5, #2a2a2a);
+		border: 1px solid light-dark(#ddd, #3a3a3a);
+		border-radius: 3px;
+		cursor: pointer;
+		color: light-dark(#666, #999);
+		transition: all 0.15s ease;
+
+		&:hover:not(:disabled) {
+			background: light-dark(#e8e8e8, #333);
+			border-color: light-dark(#bbb, #555);
+			color: light-dark(#333, #ccc);
+		}
+
+		&.active {
+			box-shadow: inset 0 1px 3px light-dark(rgb(0 0 0 / 0.15), rgb(0 0 0 / 0.35));
+			border-color: light-dark(#999, #666);
+		}
+
+		&:disabled {
+			opacity: 0.4;
+			cursor: not-allowed;
+		}
+	}
+
+	/* Narrow viewports: drop "direct " from the B1 label to save width.
+	   aria-label keeps the full phrase for assistive tech. */
+	@media (max-width: 480px) {
+		.lod-row-btn s-direct {
+			display: none;
 		}
 	}
 
