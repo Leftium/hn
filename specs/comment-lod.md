@@ -164,6 +164,17 @@ Strip layout:
 
 Solo S rows (a single S comment between non-S rows) render as a 1-segment strip rather than a distinct row type, sharing the strip's layout, styling, and bulk-action path. The only visual difference from a multi-segment strip is segment count. (The `?group=0` debug path is the exception — see below.)
 
+### Click-to-toggle (production)
+
+Rows are click-interactive without any explicit control. The rule is intentionally asymmetric:
+
+- **Click an L row** → set that comment to M
+- **Click an M row** → set that comment back to L
+- **Click any strip segment** → set **all** segments in that strip to M (bulk promotion — a click on a strip means "I want to read this compressed region", not "exactly this one id")
+- **No click path leads to S** — downgrading to S is reserved for the dev UI (`?dev=1`) and, later, Phase 5 collapse gestures (subtree collapse, "focus this thread" off-thread collapse, etc.). This keeps the default click idiomatic (expand / un-expand) and prevents accidental over-collapse during casual reading.
+
+Implementation: a single `onclick` on the `<d-comment>` element delegates to `onRowClick(e, id, lod)`, which bails when `e.target.closest('a, button, input, textarea, [contenteditable]')` matches — so nested links, buttons (including dev UI), and any future interactive elements keep their native behavior. Strip segments are `<button>` elements with their own click handler calling `setLOD(allStripIds, 'M')`. The row has `cursor: pointer`; nested links and buttons override the cursor automatically. Keyboard/ARIA affordances are deferred to Phase 5.
+
 ### S-grouping toggle (dev/debug)
 
 A module-level flag `sGroupingEnabled` (default `true`) controls whether adjacent same-level S rows merge into a strip. When `false`, every S comment renders as its own row showing a small colored block where the body would be, with no horizontal merging.

@@ -99,6 +99,29 @@
 		lodState.set(id, next);
 	}
 
+	// Production click-to-toggle: click an L row → M; click an M row → L.
+	// Never toggles to S — downgrading to S is reserved for explicit dev UI
+	// (and future Phase 5 collapse gestures). Bails when the click target is
+	// a nested interactive element (link, button, etc.) so those keep their
+	// native behavior.
+	function onRowClick(e: MouseEvent, id: number, lod: 'L' | 'M' | 'S'): void {
+		const t = e.target as HTMLElement | null;
+		if (t?.closest('a, button, input, textarea, [contenteditable]')) return;
+		if (lod === 'L') setLOD([id], 'M');
+		else if (lod === 'M') setLOD([id], 'L');
+		// lod === 'S' on an L/M-styled row shouldn't occur; ignore.
+	}
+
+	// Strip click-to-expand: clicking any segment promotes ALL strip members
+	// to M. Rationale: a strip represents a compressed region; a click says
+	// "I want to read this region", not "exactly this one id". Bulk action
+	// matches the production rule of never toggling down to S.
+	function onStripSegClick(e: MouseEvent, segmentIds: number[]): void {
+		const t = e.target as HTMLElement | null;
+		if (t?.closest('a, [contenteditable]')) return;
+		setLOD(segmentIds, 'M');
+	}
+
 	// --- Target selectors (pure) ---
 	// All selectors return number[] and read from treeIndex. Callers wrap in
 	// `new Set(...)` when set operations are needed. Post id is never included
@@ -379,6 +402,13 @@
 	{@const indent = Math.min(level - 1, MAX_INDENT)}
 	{@const colorIndex = (level - 1) % LEVEL_COLORS.length}
 	{@const barWidth = level === 1 ? 0 : Math.min(1 + level, 14)}
+	<!--
+		Row click toggles LOD (L↔M). Keyboard/ARIA affordances are deferred
+		to Phase 5 which will establish the full production control scheme;
+		dev-UI buttons remain keyboard-accessible under ?dev=1 in the meantime.
+	-->
+	<!-- svelte-ignore a11y_click_events_have_key_events -->
+	<!-- svelte-ignore a11y_no_static_element_interactions -->
 	<d-comment
 		style:--level={level}
 		style:--indent={indent}
@@ -392,14 +422,16 @@
 		data-lod={lod}
 		data-level={level}
 		data-index-level={devUiEnabled ? treeIndex.levelOf.get(comment.id) : undefined}
+		onclick={(e: MouseEvent) => onRowClick(e, comment.id, lod)}
 	>
 		{#if lod === 'S'}
-			<!-- Ungrouped S row: tiny colored block placeholder, click to cycle -->
+			<!-- Ungrouped S row (?group=0 dev path): colored block placeholder,
+			     click promotes to M to match the production click rule. -->
 			<button
 				type="button"
 				class="s-solo"
-				aria-label="cycle LOD for comment {comment.id}"
-				onclick={() => toggleLOD(comment.id)}
+				aria-label="expand comment {comment.id} to M"
+				onclick={() => setLOD([comment.id], 'M')}
 			></button>
 		{:else}
 			<!--
@@ -482,9 +514,13 @@
 					style:--seg-color={segColor}
 					style:--seg-width="{segWidth}px"
 					data-seg-level={seg.level}
-					aria-label="cycle LOD for comment {seg.id} (level {seg.level})"
-					title="level {seg.level} — cycle LOD for #{seg.id}"
-					onclick={() => toggleLOD(seg.id)}
+					aria-label="expand strip to M (contains comment {seg.id} level {seg.level})"
+					title="level {seg.level} — expand strip"
+					onclick={(e) =>
+						onStripSegClick(
+							e,
+							strip.segments.map((s) => s.id)
+						)}
 				></button>
 			{/each}
 		</d-strip-segs>
@@ -929,6 +965,10 @@
 			color-mix(in srgb, var(--level-color, transparent) 70%, transparent);
 		background: light-dark(#ffffff, #262626);
 		overflow: hidden;
+		/* Row click toggles LOD (L↔M). Nested a/button override cursor
+		   automatically; comment body text inherits the pointer as a signal
+		   that the row is interactive. */
+		cursor: pointer;
 
 		/* Top-level comments (depth 0) — no colored left border */
 		&.top-level {
