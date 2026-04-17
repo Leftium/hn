@@ -175,6 +175,14 @@
 	// individually (no horizontal merging). See spec §Rendering > S-grouping toggle.
 	const sGroupingEnabled = $derived(page.url.searchParams.get('group') !== '0');
 
+	// --- Dev UI toggle ---
+	// Default off; enable with ?dev=1 in the URL to render the per-row LOD
+	// toggle buttons (s-lod-dev) and the data-index-level debug attribute.
+	// Production users don't see these; Phase 5 will replace them with real
+	// UX actions. The ungrouped s-solo path (via ?group=0) is independent —
+	// it's a rendering mode, not a dev affordance.
+	const devUiEnabled = $derived(page.url.searchParams.get('dev') === '1');
+
 	// --- Flat render list ---
 	// Walks item.comments in pre-order producing an ordered list of render
 	// items. Consecutive S rows (by LOD) are merged into a single strip
@@ -383,7 +391,7 @@
 		class:new-comment={isNew}
 		data-lod={lod}
 		data-level={level}
-		data-index-level={treeIndex.levelOf.get(comment.id)}
+		data-index-level={devUiEnabled ? treeIndex.levelOf.get(comment.id) : undefined}
 	>
 		{#if lod === 'S'}
 			<!-- Ungrouped S row: tiny colored block placeholder, click to cycle -->
@@ -430,32 +438,34 @@
 					{@html comment.content}
 				</d-comment-body>
 			{/if}
-			<!-- Dev UI (Phase 3): LOD toggle buttons. Replaced in Phase 5. -->
-			<s-lod-dev>
-				<button
-					type="button"
-					class="lod-btn"
-					class:active={lod === 'L'}
-					aria-label="set LOD to L"
-					onclick={() => toggleLOD(comment.id, 'L')}>L</button
-				><button
-					type="button"
-					class="lod-btn"
-					class:active={lod === 'M'}
-					aria-label="set LOD to M"
-					onclick={() => toggleLOD(comment.id, 'M')}>M</button
-				><button
-					type="button"
-					class="lod-btn"
-					aria-label="set LOD to S"
-					onclick={() => toggleLOD(comment.id, 'S')}>S</button
-				><button
-					type="button"
-					class="lod-btn cycle"
-					aria-label="cycle LOD"
-					onclick={() => toggleLOD(comment.id)}>↻</button
-				>
-			</s-lod-dev>
+			<!-- Dev UI (Phase 3): LOD toggle buttons. Gated by ?dev=1. Replaced in Phase 5. -->
+			{#if devUiEnabled}
+				<s-lod-dev>
+					<button
+						type="button"
+						class="lod-btn"
+						class:active={lod === 'L'}
+						aria-label="set LOD to L"
+						onclick={() => toggleLOD(comment.id, 'L')}>L</button
+					><button
+						type="button"
+						class="lod-btn"
+						class:active={lod === 'M'}
+						aria-label="set LOD to M"
+						onclick={() => toggleLOD(comment.id, 'M')}>M</button
+					><button
+						type="button"
+						class="lod-btn"
+						aria-label="set LOD to S"
+						onclick={() => toggleLOD(comment.id, 'S')}>S</button
+					><button
+						type="button"
+						class="lod-btn cycle"
+						aria-label="cycle LOD"
+						onclick={() => toggleLOD(comment.id)}>↻</button
+					>
+				</s-lod-dev>
+			{/if}
 		{/if}
 	</d-comment>
 {/snippet}
@@ -478,40 +488,42 @@
 				></button>
 			{/each}
 		</d-strip-segs>
-		<!-- Dev UI (Phase 3): bulk LOD toggle for all strip members. -->
-		<s-lod-dev>
-			<button
-				type="button"
-				class="lod-btn"
-				aria-label="set all strip members to L"
-				onclick={() =>
-					setLOD(
-						strip.segments.map((s) => s.id),
-						'L'
-					)}>L</button
-			><button
-				type="button"
-				class="lod-btn"
-				aria-label="set all strip members to M"
-				onclick={() =>
-					setLOD(
-						strip.segments.map((s) => s.id),
-						'M'
-					)}>M</button
-			><button
-				type="button"
-				class="lod-btn active"
-				aria-label="all strip members are S"
-				title="active (all members already S)">S</button
-			><button
-				type="button"
-				class="lod-btn cycle"
-				aria-label="cycle LOD for all strip members"
-				onclick={() => {
-					for (const s of strip.segments) toggleLOD(s.id);
-				}}>↻</button
-			>
-		</s-lod-dev>
+		<!-- Dev UI (Phase 3): bulk LOD toggle for all strip members. Gated by ?dev=1. -->
+		{#if devUiEnabled}
+			<s-lod-dev>
+				<button
+					type="button"
+					class="lod-btn"
+					aria-label="set all strip members to L"
+					onclick={() =>
+						setLOD(
+							strip.segments.map((s) => s.id),
+							'L'
+						)}>L</button
+				><button
+					type="button"
+					class="lod-btn"
+					aria-label="set all strip members to M"
+					onclick={() =>
+						setLOD(
+							strip.segments.map((s) => s.id),
+							'M'
+						)}>M</button
+				><button
+					type="button"
+					class="lod-btn active"
+					aria-label="all strip members are S"
+					title="active (all members already S)">S</button
+				><button
+					type="button"
+					class="lod-btn cycle"
+					aria-label="cycle LOD for all strip members"
+					onclick={() => {
+						for (const s of strip.segments) toggleLOD(s.id);
+					}}>↻</button
+				>
+			</s-lod-dev>
+		{/if}
 	</d-comment-strip>
 {/snippet}
 
@@ -893,18 +905,21 @@
 
 	d-comment {
 		/*
-			Default layout (L): grid with body on top, meta-info bottom-left,
-			dev-UI bottom-right. Three children in fixed DOM order:
+			Default layout (L): grid with body on top, meta-info below. Dev UI,
+			when enabled (?dev=1), is absolute-positioned at the viewport-left
+			gutter and sits outside grid flow. Three children in fixed DOM order:
 			  <d-comment-meta>  → area "meta"
 			  <d-comment-body>  → area "body"
-			  <s-lod-dev>       → area "dev"
+			  <s-lod-dev>       → absolute, left: 0 (see dev UI rules below)
 			S-solo and dead rows place a single child in "body" area; that's fine.
+			position: relative anchors the absolute dev UI regardless of LOD.
 		*/
+		position: relative;
 		display: grid;
-		grid-template-columns: 1fr auto;
+		grid-template-columns: 1fr;
 		grid-template-areas:
-			'body body'
-			'meta dev';
+			'body'
+			'meta';
 		column-gap: var(--size-2);
 		row-gap: var(--size-1);
 		padding: var(--size-2) var(--size-2) var(--size-2)
@@ -946,15 +961,11 @@
 			grid-area: body;
 		}
 
-		> s-lod-dev {
-			grid-area: dev;
-			align-self: center;
-		}
-
 		/*
 			M layout override: single line. Switch to flex so body can flex-grow
-			between meta-info and dev-UI, and ellipsis-truncate. Grid areas are
-			ignored when display changes away from grid.
+			between meta-info and (absolutely positioned) dev-UI, and
+			ellipsis-truncate. Grid areas are ignored when display changes away
+			from grid.
 		*/
 		&[data-lod='M'] {
 			display: flex;
@@ -1117,24 +1128,6 @@
 		flex: 0 0 auto;
 	}
 
-	/* M dev UI is absolutely positioned so it takes no horizontal layout
-	   space — body ellipsis extends to the right padding edge. On hover
-	   the dev UI appears overlapping the tail of the body text, which is
-	   acceptable for a transient debug affordance. d-comment's overflow:
-	   hidden keeps the dev UI from escaping the row; it sits inside the
-	   existing right padding. Requires position: relative on the parent. */
-	d-comment[data-lod='M'] {
-		position: relative;
-	}
-
-	d-comment[data-lod='M'] > s-lod-dev {
-		position: absolute;
-		right: var(--size-2);
-		top: 50%;
-		transform: translateY(-50%);
-		flex: none;
-	}
-
 	d-comment[data-lod='M'] d-comment-body :global {
 		p,
 		pre,
@@ -1212,18 +1205,11 @@
 		margin: 0;
 		background: light-dark(#ffffff, #262626);
 		border-top: 1px solid light-dark(#e6e6df, #3a3a3a);
-		/* Row is intentionally short; dev-UI buttons are positioned absolutely
-		   so they don't force the row height via flex stretch, and overflow
-		   vertically above/below the band. */
+		/* Row is intentionally short; dev-UI buttons (when ?dev=1) are
+		   absolutely positioned at left: 0 so they don't force the row height
+		   via flex stretch, and overflow vertically above/below the band. */
 		position: relative;
 		overflow: visible;
-	}
-
-	d-comment-strip > s-lod-dev {
-		position: absolute;
-		right: var(--size-2);
-		top: 50%;
-		transform: translateY(-50%);
 	}
 
 	d-strip-segs {
@@ -1268,24 +1254,40 @@
 	}
 
 	/* --- Dev UI: LOD toggle buttons (Phase 3, removed in Phase 5) ---
-	   Hidden by default; revealed on row hover so at most one row's controls
-	   show at a time. Opacity (not visibility) preserves layout space so M
-	   row body widths don't jump when hovering. On touch devices without
-	   hover (hover: none), show always — users can't reveal them otherwise. */
+	   Only rendered when ?dev=1 is set. Absolute-positioned at the
+	   viewport-left gutter (left: 0) and vertically centered, so placement
+	   is consistent across L/M/strip rows regardless of indent depth. At
+	   deep levels, the buttons overlap the accent bar and indent area —
+	   acceptable for a debug affordance, and the gated rendering means
+	   production users never see this. Parent rows (d-comment, d-comment-strip)
+	   provide position: relative as the containing block.
+
+	   Reveal policy: hidden by default (opacity: 0); shown on row hover, or
+	   when a descendant receives keyboard focus. :focus-visible (not
+	   :focus-within) is used intentionally so that mouse-clicking a button
+	   doesn't sustain the reveal after the pointer leaves. On touch devices
+	   (hover: none) always visible. */
 	s-lod-dev {
+		position: absolute;
+		left: 0;
+		top: 50%;
+		transform: translateY(-50%);
 		display: inline-flex;
-		margin-left: auto;
 		font-family: var(--font-mono, monospace);
 		border: 1px solid light-dark(#ccc, #444);
 		border-radius: 3px;
 		overflow: hidden;
+		background: light-dark(#f5f5f5, #2a2a2a);
 		opacity: 0;
 		transition: opacity 0.1s ease;
+		/* Above row background/borders so buttons remain clickable over the
+		   accent bar + indent area. */
+		z-index: 1;
 	}
 
 	d-comment:hover > s-lod-dev,
 	d-comment-strip:hover > s-lod-dev,
-	s-lod-dev:focus-within {
+	s-lod-dev:has(:focus-visible) {
 		opacity: 1;
 	}
 

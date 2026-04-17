@@ -176,6 +176,12 @@ Toggleable via URL query parameter `?group=0` for a session. Useful during devel
 
 Production default is `true`; the flag is not exposed in production UI.
 
+### Dev UI toggle (dev/debug)
+
+A module-level flag `devUiEnabled` (default `false`) gates the per-row/per-strip LOD toggle buttons (`<s-lod-dev>`) and the `data-index-level` debug attribute. Without the flag these aren't rendered at all, keeping the production DOM clean.
+
+Toggleable via URL query parameter `?dev=1` for a session. When enabled, the toggle buttons appear at the viewport-left gutter of each row (absolute-positioned, `left: 0`, vertically centered). They overlap the accent bar and indent area at deeper levels; this is intentional and acceptable for a debug-only affordance. Independent of `?group=0`.
+
 ### Post rendering
 
 Post is always rendered as the story header, not a comment row. Its LOD entry in `lodState` (if any) is simply never read — the renderer has a dedicated code path for the post. Post gets the same UI controls as comments so post-level actions (e.g. "collapse all level ≥ 2") have a home, but those controls affect descendants via selectors, not the post's own rendering.
@@ -216,8 +222,8 @@ Rationale: the legacy logic was ~700 lines entangled across state, template, and
   - `[↻]` calls `toggleLOD(id)` with no override (cycles L→M→S→L)
   - Current LOD visually indicated (active button highlighted)
 - **Per-strip dev UI**: same four buttons acting on all segments in the strip via `setLOD(strip.segments.map(s => s.id), level)`. `[S]` is always active (the strip's members are by definition S). `[↻]` cycles all members in lockstep.
-- **Visibility**: dev UI is `opacity: 0` by default and revealed on row hover (or `:focus-within`) so at most one row's controls are visible at a time. Under `@media (hover: none)` (touch devices) it's always visible — there's no way to reveal it otherwise. On M and strip rows the dev UI is `position: absolute` anchored to the right edge so it contributes zero horizontal layout space (body ellipsis extends to the edge) and zero vertical layout space (strip row stays short; dev UI overflows visually above/below the band when hovered).
-- Manual testing: all transitions work, order stable, S-grouping visible, `?group=0` unmerges strips and renders solo S via the `s-solo` commentRow path
+- **Visibility**: dev UI is gated behind the `?dev=1` URL query parameter — it's not rendered at all without the flag, leaving the production surface clean. When rendered, it's `position: absolute` anchored to the viewport-left gutter (`left: 0`, vertically centered) on all three row types (L/M/strip), so placement is consistent regardless of indent depth. At deep levels the buttons overlap the accent bar / indent area — acceptable for a debug-only affordance. Parent rows provide `position: relative` as the containing block. A `z-index: 1` keeps the buttons clickable over row chrome. Reveal policy: `opacity: 0` by default, shown on row hover or when a descendant has `:focus-visible`. `:focus-visible` (not `:focus-within`) is deliberate: mouse-clicking a button leaves focus on the button but not `:focus-visible`, so the dev UI doesn't stay stuck on after the pointer leaves (an earlier bug). Under `@media (hover: none)` (touch devices) always visible.
+- Manual testing: all transitions work, order stable, S-grouping visible, `?group=0` unmerges strips and renders solo S via the `s-solo` commentRow path, `?dev=1` reveals toggle buttons + `data-index-level` attribute
 
 ### Phase 4: Default initial state ✅
 
