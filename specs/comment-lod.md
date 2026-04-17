@@ -175,6 +175,21 @@ Rows are click-interactive without any explicit control. The rule is intentional
 
 Implementation: a single `onclick` on the `<d-comment>` element delegates to `onRowClick(e, id, lod)`, which bails when `e.target.closest('a, button, input, textarea, [contenteditable]')` matches — so nested links, buttons (including dev UI), and any future interactive elements keep their native behavior. Strip segments are `<button>` elements with their own click handler calling `setLOD(allStripIds, 'M')`. The row has `cursor: pointer`; nested links and buttons override the cursor automatically. Keyboard/ARIA affordances are deferred to Phase 5.
 
+### Click highlight
+
+Every production click also updates a `highlightedIds` set (`SvelteSet<number>`) via a `setHighlight(ids)` primitive that atomically clears then refills the set. Rows whose id is in the set render with a persistent soft-blue background (`.just-clicked` class, `rgba(74, 158, 218, 0.12)` light / `0.15` dark). There is no fade — the highlight stays until the next qualifying click replaces it, or until story navigation clears it.
+
+Rationale: when clicking a strip expands it into N new M rows, the layout shifts significantly. The sustained highlight on all N new rows lets the user quickly locate the region they just expanded, regardless of scroll position or where the rows ended up vertically. Same for single L↔M toggles that shift neighboring row heights.
+
+Highlight rules:
+
+- **Click L/M row**: `setHighlight([id])` — only that row highlights
+- **Click strip**: `setHighlight(strip.segments.map(s => s.id))` — all new M rows highlight
+- **Story navigation** (item id changes): `highlightedIds.clear()` alongside `lodState.clear()` in the default-level `$effect`
+- **Dev UI (`?dev=1`) buttons do not write to `highlightedIds`** — dev UI is a debug affordance, separate from production UX
+
+The highlight layers cleanly over `.new-comment` (orange right border + faint orange background): blue background wins (later cascade rule), orange right border remains. Click is the more recent, more relevant signal.
+
 ### S-grouping toggle (dev/debug)
 
 A module-level flag `sGroupingEnabled` (default `true`) controls whether adjacent same-level S rows merge into a strip. When `false`, every S comment renders as its own row showing a small colored block where the body would be, with no horizontal merging.

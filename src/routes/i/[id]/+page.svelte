@@ -11,7 +11,7 @@
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import { onMount } from 'svelte';
-	import { SvelteMap } from 'svelte/reactivity';
+	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 	import 'open-props/style';
 	import dayjs from 'dayjs';
 
@@ -99,6 +99,23 @@
 		lodState.set(id, next);
 	}
 
+	// --- Click highlight state ---
+	// Persistent (no fade): the set of ids most recently affected by a user
+	// click. Cleared + refilled on each qualifying action, so at any time it
+	// reflects the "last place the user touched". Useful after layout shift
+	// from toggling a strip — the N new M rows stay highlighted until the
+	// next click, making them easy to re-locate.
+	//
+	// Only production click actions (row click L↔M, strip click → M) write
+	// here. Dev UI (?dev=1) intentionally does not highlight; it's a debug
+	// affordance, not production UX.
+	const highlightedIds = new SvelteSet<number>();
+
+	function setHighlight(ids: Iterable<number>): void {
+		highlightedIds.clear();
+		for (const id of ids) highlightedIds.add(id);
+	}
+
 	// Production click-to-toggle: click an L row → M; click an M row → L.
 	// Never toggles to S — downgrading to S is reserved for explicit dev UI
 	// (and future Phase 5 collapse gestures). Bails when the click target is
@@ -109,17 +126,21 @@
 		if (t?.closest('a, button, input, textarea, [contenteditable]')) return;
 		if (lod === 'L') setLOD([id], 'M');
 		else if (lod === 'M') setLOD([id], 'L');
-		// lod === 'S' on an L/M-styled row shouldn't occur; ignore.
+		else return; // lod === 'S' on an L/M-styled row shouldn't occur
+		setHighlight([id]);
 	}
 
 	// Strip click-to-expand: clicking any segment promotes ALL strip members
 	// to M. Rationale: a strip represents a compressed region; a click says
 	// "I want to read this region", not "exactly this one id". Bulk action
-	// matches the production rule of never toggling down to S.
+	// matches the production rule of never toggling down to S. All new M
+	// rows are highlighted so the user can re-locate the expanded region
+	// after the strip-to-rows layout shift.
 	function onStripSegClick(e: MouseEvent, segmentIds: number[]): void {
 		const t = e.target as HTMLElement | null;
 		if (t?.closest('a, [contenteditable]')) return;
 		setLOD(segmentIds, 'M');
+		setHighlight(segmentIds);
 	}
 
 	// --- Target selectors (pure) ---
@@ -182,6 +203,7 @@
 	$effect(() => {
 		void item.id; // track item changes
 		lodState.clear();
+		highlightedIds.clear();
 		const M: number[] = [];
 		const S: number[] = [];
 		for (const id of treeIndex.allIds) {
@@ -419,6 +441,7 @@
 		class:deleted={isDeleted && !isDead}
 		class:dead={isDead}
 		class:new-comment={isNew}
+		class:just-clicked={highlightedIds.has(comment.id)}
 		data-lod={lod}
 		data-level={level}
 		data-index-level={devUiEnabled ? treeIndex.levelOf.get(comment.id) : undefined}
@@ -991,6 +1014,17 @@
 		&.new-comment {
 			border-right: 3px solid #ff6600;
 			background: light-dark(rgba(255, 102, 0, 0.03), rgba(255, 102, 0, 0.06));
+		}
+
+		/* Click highlight: persistent (no fade) soft-blue background applied
+		   to the most recently clicked row (L/M) or every row in a just-
+		   expanded strip. Cleared/refilled on each qualifying click via
+		   setHighlight; cleared on story navigation. Placed after .new-comment
+		   so a NEW row that's just been clicked shows blue (click is the more
+		   recent / more relevant signal); the orange right-border from
+		   .new-comment is preserved. */
+		&.just-clicked {
+			background: light-dark(rgba(74, 158, 218, 0.12), rgba(74, 158, 218, 0.15));
 		}
 
 		> d-comment-meta {
