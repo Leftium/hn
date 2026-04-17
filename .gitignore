@@ -1,5 +1,8 @@
 node_modules
 
+# gg file sink logs
+.gg/
+
 # Output
 .output
 .vercel
