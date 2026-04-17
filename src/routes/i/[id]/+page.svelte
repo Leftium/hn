@@ -116,65 +116,223 @@
 		for (const id of ids) highlightedIds.add(id);
 	}
 
-	// --- Height animation (Phase 4.5) ---
-	// FLIP-style height transitions for row LOD changes. Callers:
-	//   1. Call snapshotRowHeights() BEFORE mutating lodState.
-	//   2. Mutate state (setLOD / toggleLOD / etc).
-	//   3. await animateRowHeights(snapshot, anchorEl?, rectBefore?) which
-	//      tick()s, scroll-anchors to anchorEl (keeping it visually fixed),
-	//      then transitions height from old→new on any <d-comment> whose
-	//      height changed.
+	// --- Layout animation (Phase 4.5) ---
+	// FLIP-style transitions for LOD changes. Handles three cases in one pass:
 	//
-	// Currently wired only for row click (L↔M). Strip-expand and bulk
-	// actions will extend in a follow-up commit — they need wrapper-based
-	// animation because they swap <d-comment-strip> for N <d-comment> rows
-	// (different DOM nodes, not just height changes).
+	//   A) Same-node height change (row L↔M): <d-comment data-comment-id=X>
+	//      stays mounted, only data-lod flips → grid/flex swap drives a height
+	//      delta. Animate the element's height before→after.
+	//
+	//   B) Region swap (strip seg click, B1/B2/B3, A1/A2 bulk actions):
+	//      <d-comment-strip> is replaced by N <d-comment> rows (or vice versa).
+	//      The swapped DOM nodes don't exist both before AND after, so we:
+	//        - animate surviving elements (case A) concurrently,
+	//        - fade-in new elements from height:0 → natural height,
+	//        - animate total <d-comments> wrapper height to smooth over
+	//          removed elements whose DOM is already gone.
+	//
+	//   C) Scroll anchoring (shared): keep the clicked element visually fixed
+	//      across the layout shift, so bulk expansions don't send it
+	//      offscreen.
+	//
+	// Callers:
+	//   1. Capture `rectBefore = anchorEl.getBoundingClientRect()`.
+	//   2. `const snap = snapshotLayout()`.
+	//   3. Mutate state.
+	//   4. `await animateLayoutChange(snap, anchorEl, rectBefore)`.
+	//
+	// Viewport cap: rows whose pre- or post-rect sit outside a 3-viewport band
+	// (±1 screen) snap instantly. Keeps A1/A2 cheap on long threads. The
+	// wrapper-height animation always runs — it's O(1).
 	const ANIM_DURATION_MS = 350;
+	// Beyond this many animating elements in band, drop per-row animation and
+	// keep only the wrapper-height sweep. Picked by feel; tune if needed.
+	const PER_ROW_CAP = 40;
 
-	function snapshotRowHeights(): Map<number, number> {
-		const out = new Map<number, number>();
-		const els = document.querySelectorAll<HTMLElement>('d-comment[data-comment-id]');
-		for (const el of els) {
-			const id = Number(el.dataset.commentId);
-			if (Number.isFinite(id)) out.set(id, el.offsetHeight);
-		}
-		return out;
+	interface LayoutSnapshot {
+		// Height of each mounted <d-comment> (keyed by comment id).
+		rowHeights: Map<number, number>;
+		// Height of each mounted <d-comment-strip> (keyed by data-strip-key).
+		stripHeights: Map<string, number>;
+		// Total <d-comments> wrapper height (O(1) FLIP target).
+		containerHeight: number;
+		// Viewport band at snapshot time for culling offscreen animations.
+		viewportTop: number;
+		viewportBottom: number;
 	}
 
-	async function animateRowHeights(
-		heightsBefore: Map<number, number>,
+	function snapshotLayout(): LayoutSnapshot {
+		const rowHeights = new Map<number, number>();
+		for (const el of document.querySelectorAll<HTMLElement>('d-comment[data-comment-id]')) {
+			const id = Number(el.dataset.commentId);
+			if (Number.isFinite(id)) rowHeights.set(id, el.offsetHeight);
+		}
+		const stripHeights = new Map<string, number>();
+		for (const el of document.querySelectorAll<HTMLElement>('d-comment-strip[data-strip-key]')) {
+			const key = el.dataset.stripKey;
+			if (key) stripHeights.set(key, el.offsetHeight);
+		}
+		const container = document.querySelector<HTMLElement>('d-comments');
+		const containerHeight = container?.offsetHeight ?? 0;
+		const vh = window.innerHeight;
+		return {
+			rowHeights,
+			stripHeights,
+			containerHeight,
+			viewportTop: window.scrollY - vh,
+			viewportBottom: window.scrollY + 2 * vh
+		};
+	}
+
+	// Apply a FLIP-style height transition on `el` from hBefore → hAfter.
+	// Uses `height` longhand so it composes with background transitions
+	// (just-clicked highlight).
+	function animateElementHeight(el: HTMLElement, hBefore: number, hAfter: number): void {
+		el.style.overflow = 'hidden';
+		el.style.height = `${hBefore}px`;
+		el.style.transitionProperty = 'none';
+		// Force reflow so the height:hBefore takes effect before transition enables.
+		void el.offsetHeight;
+		el.style.transitionProperty = 'height';
+		el.style.transitionDuration = `${ANIM_DURATION_MS}ms`;
+		el.style.transitionTimingFunction = 'ease-out';
+		el.style.height = `${hAfter}px`;
+
+		const cleanup = () => {
+			el.style.height = '';
+			el.style.overflow = '';
+			el.style.transitionProperty = '';
+			el.style.transitionDuration = '';
+			el.style.transitionTimingFunction = '';
+		};
+		el.addEventListener('transitionend', cleanup, { once: true });
+		setTimeout(cleanup, ANIM_DURATION_MS + 50);
+	}
+
+	// True if element's post-mutation rect (already measured in caller) and
+	// snapshot viewport band overlap. Conservative: any intersection counts.
+	function inBand(rectTop: number, rectBottom: number, snap: LayoutSnapshot): boolean {
+		return rectBottom >= snap.viewportTop && rectTop <= snap.viewportBottom;
+	}
+
+	async function animateLayoutChange(
+		snap: LayoutSnapshot,
 		anchorEl?: HTMLElement | null,
-		rectBefore?: DOMRect
+		rectBefore?: DOMRect,
+		// Optional: selector for the post-mutation anchor when `anchorEl` itself
+		// may be unmounted (e.g. strip → rows swap). If provided, used only
+		// when anchorEl is no longer connected.
+		anchorAfterSelector?: string
 	): Promise<void> {
 		await tick();
 
 		// Scroll anchoring — keep anchor element visually in place after layout shift.
-		if (anchorEl && rectBefore) {
-			const rectAfter = anchorEl.getBoundingClientRect();
-			const shift = rectAfter.top - rectBefore.top;
-			if (Math.abs(shift) > 1) window.scrollBy(0, shift);
+		if (rectBefore) {
+			let anchorAfter: HTMLElement | null = null;
+			if (anchorEl && anchorEl.isConnected) {
+				anchorAfter = anchorEl;
+			} else if (anchorAfterSelector) {
+				anchorAfter = document.querySelector<HTMLElement>(anchorAfterSelector);
+			}
+			if (anchorAfter) {
+				const rectAfter = anchorAfter.getBoundingClientRect();
+				const shift = rectAfter.top - rectBefore.top;
+				if (Math.abs(shift) > 1) window.scrollBy(0, shift);
+			}
 		}
 
-		// Animate each changed row's height from before→after.
-		for (const [id, hBefore] of heightsBefore) {
-			const el = document.querySelector<HTMLElement>(`d-comment[data-comment-id="${id}"]`);
-			if (!el) continue;
-			const hAfter = el.offsetHeight;
-			if (hBefore === hAfter) continue;
+		// --- Container-height sweep (always, O(1)) ---
+		// Covers the net delta including rows that were unmounted (their
+		// DOM is already gone so we can't animate them individually).
+		const container = document.querySelector<HTMLElement>('d-comments');
+		if (container) {
+			const hAfter = container.offsetHeight;
+			if (hAfter !== snap.containerHeight) {
+				animateElementHeight(container, snap.containerHeight, hAfter);
+			}
+		}
 
+		// --- Collect per-element animations (with viewport cull + cap) ---
+		interface PendingRow {
+			el: HTMLElement;
+			hBefore: number;
+			hAfter: number;
+		}
+		const survivingRows: PendingRow[] = [];
+		const newRows: PendingRow[] = [];
+
+		for (const el of document.querySelectorAll<HTMLElement>('d-comment[data-comment-id]')) {
+			const id = Number(el.dataset.commentId);
+			if (!Number.isFinite(id)) continue;
+			const rect = el.getBoundingClientRect();
+			// Post-rect is relative to viewport; snap viewport band is in document
+			// coords. Convert: rect.top + window.scrollY. Do this lazily since
+			// scroll may have adjusted above.
+			const docTop = rect.top + window.scrollY;
+			const docBottom = rect.bottom + window.scrollY;
+			if (!inBand(docTop, docBottom, snap)) continue;
+
+			const hAfter = el.offsetHeight;
+			const hBefore = snap.rowHeights.get(id);
+			if (hBefore === undefined) {
+				// Newly mounted (was a strip member, now a row).
+				if (hAfter > 0) newRows.push({ el, hBefore: 0, hAfter });
+			} else if (hBefore !== hAfter) {
+				survivingRows.push({ el, hBefore, hAfter });
+			}
+		}
+
+		// Also handle strips that survived (rare: bulk actions may leave some
+		// strips intact but reshape others). Same-key match = same membership
+		// ordering, so height delta is meaningful.
+		const survivingStrips: PendingRow[] = [];
+		for (const el of document.querySelectorAll<HTMLElement>('d-comment-strip[data-strip-key]')) {
+			const key = el.dataset.stripKey;
+			if (!key) continue;
+			const rect = el.getBoundingClientRect();
+			const docTop = rect.top + window.scrollY;
+			const docBottom = rect.bottom + window.scrollY;
+			if (!inBand(docTop, docBottom, snap)) continue;
+
+			const hAfter = el.offsetHeight;
+			const hBefore = snap.stripHeights.get(key);
+			if (hBefore === undefined) {
+				// Newly mounted strip (e.g. B3 regrouped a subtree).
+				if (hAfter > 0) newRows.push({ el, hBefore: 0, hAfter });
+			} else if (hBefore !== hAfter) {
+				survivingStrips.push({ el, hBefore, hAfter });
+			}
+		}
+
+		const total = survivingRows.length + survivingStrips.length + newRows.length;
+		if (total > PER_ROW_CAP) {
+			// Too many to animate smoothly — rely on container sweep alone.
+			return;
+		}
+
+		for (const { el, hBefore, hAfter } of survivingRows) {
+			animateElementHeight(el, hBefore, hAfter);
+		}
+		for (const { el, hBefore, hAfter } of survivingStrips) {
+			animateElementHeight(el, hBefore, hAfter);
+		}
+		for (const { el, hAfter } of newRows) {
+			// height: 0 → natural, with opacity fade to soften pop-in.
+			el.style.opacity = '0';
 			el.style.overflow = 'hidden';
-			el.style.height = `${hBefore}px`;
+			el.style.height = '0px';
 			el.style.transitionProperty = 'none';
-			// Force reflow so the height:hBefore takes effect before transition enables.
 			void el.offsetHeight;
-			el.style.transitionProperty = 'height';
+			el.style.transitionProperty = 'height, opacity';
 			el.style.transitionDuration = `${ANIM_DURATION_MS}ms`;
 			el.style.transitionTimingFunction = 'ease-out';
 			el.style.height = `${hAfter}px`;
+			el.style.opacity = '1';
 
 			const cleanup = () => {
 				el.style.height = '';
 				el.style.overflow = '';
+				el.style.opacity = '';
 				el.style.transitionProperty = '';
 				el.style.transitionDuration = '';
 				el.style.transitionTimingFunction = '';
@@ -690,9 +848,9 @@
 			if (lod !== 'L' && lod !== 'M') return;
 			const el = e.currentTarget as HTMLElement;
 			const rectBefore = el.getBoundingClientRect();
-			const snapshot = snapshotRowHeights();
+			const snap = snapshotLayout();
 			onRowClick(e, comment.id, lod);
-			await animateRowHeights(snapshot, el, rectBefore);
+			await animateLayoutChange(snap, el, rectBefore);
 		}}
 		onkeydown={async (e: KeyboardEvent) => {
 			if (e.key !== 'Enter' && e.key !== ' ') return;
@@ -701,9 +859,9 @@
 			if (lod !== 'L' && lod !== 'M') return;
 			const el = e.currentTarget as HTMLElement;
 			const rectBefore = el.getBoundingClientRect();
-			const snapshot = snapshotRowHeights();
+			const snap = snapshotLayout();
 			onRowKeydown(e, comment.id, lod);
-			await animateRowHeights(snapshot, el, rectBefore);
+			await animateLayoutChange(snap, el, rectBefore);
 		}}
 	>
 		{#if lod === 'S'}
@@ -761,9 +919,15 @@
 							aria-label="Expand direct replies"
 							disabled={!hasKids}
 							title="Expand/collapse direct replies"
-							onclick={(e) => {
+							onclick={async (e) => {
 								e.stopPropagation();
+								const anchor = (e.currentTarget as HTMLElement).closest(
+									'd-comment'
+								) as HTMLElement | null;
+								const rectBefore = anchor?.getBoundingClientRect();
+								const snap = snapshotLayout();
 								onExpandReplies(comment.id);
+								await animateLayoutChange(snap, anchor, rectBefore);
 							}}
 						>
 							Expand&nbsp;<s-direct>direct&nbsp;</s-direct>replies
@@ -775,9 +939,15 @@
 							aria-pressed={b3Active}
 							disabled={!hasDesc || allLActive}
 							title="Ungroup/regroup subtree strips"
-							onclick={(e) => {
+							onclick={async (e) => {
 								e.stopPropagation();
+								const anchor = (e.currentTarget as HTMLElement).closest(
+									'd-comment'
+								) as HTMLElement | null;
+								const rectBefore = anchor?.getBoundingClientRect();
+								const snap = snapshotLayout();
 								onUngroupSubtree(comment.id);
+								await animateLayoutChange(snap, anchor, rectBefore);
 							}}
 						>
 							Ungroup
@@ -789,9 +959,15 @@
 							aria-pressed={b2Active}
 							disabled={!hasDesc}
 							title="Expand/collapse entire subtree"
-							onclick={(e) => {
+							onclick={async (e) => {
 								e.stopPropagation();
+								const anchor = (e.currentTarget as HTMLElement).closest(
+									'd-comment'
+								) as HTMLElement | null;
+								const rectBefore = anchor?.getBoundingClientRect();
+								const snap = snapshotLayout();
 								onExpandSubtree(comment.id);
+								await animateLayoutChange(snap, anchor, rectBefore);
 							}}
 						>
 							Expand
@@ -837,7 +1013,11 @@
 {/snippet}
 
 {#snippet stripRow(strip: StripItem)}
-	<d-comment-strip data-min-level={strip.minLevel} data-strip-size={strip.segments.length}>
+	<d-comment-strip
+		data-min-level={strip.minLevel}
+		data-strip-size={strip.segments.length}
+		data-strip-key="s-{strip.segments[0].id}"
+	>
 		<d-strip-segs>
 			{#each strip.segments as seg (seg.id)}
 				{@const segColor = LEVEL_COLORS[(seg.level - 1) % LEVEL_COLORS.length]}
@@ -850,11 +1030,27 @@
 					data-seg-level={seg.level}
 					aria-label="expand strip to M (contains comment {seg.id} level {seg.level})"
 					title="level {seg.level} — expand strip"
-					onclick={(e) =>
+					onclick={async (e) => {
+						const anchor = (e.currentTarget as HTMLElement).closest(
+							'd-comment-strip'
+						) as HTMLElement | null;
+						const rectBefore = anchor?.getBoundingClientRect();
+						const firstId = strip.segments[0].id;
+						const snap = snapshotLayout();
 						onStripSegClick(
 							e,
 							strip.segments.map((s) => s.id)
-						)}
+						);
+						// After the strip unmounts, the first segment becomes a
+						// <d-comment> row — anchor scroll to it so the clicked
+						// region stays put.
+						await animateLayoutChange(
+							snap,
+							anchor,
+							rectBefore,
+							`d-comment[data-comment-id="${firstId}"]`
+						);
+					}}
 				></button>
 			{/each}
 		</d-strip-segs>
@@ -913,7 +1109,13 @@
 					aria-pressed={ungroupAllActive}
 					disabled={allLActive}
 					title="Show every comment (no grouped strips)"
-					onclick={onUngroupAll}
+					onclick={async (e) => {
+						const anchor = e.currentTarget as HTMLElement;
+						const rectBefore = anchor.getBoundingClientRect();
+						const snap = snapshotLayout();
+						onUngroupAll();
+						await animateLayoutChange(snap, anchor, rectBefore);
+					}}
 				>
 					Ungroup all
 				</button>
@@ -923,7 +1125,13 @@
 					class:active={allLActive}
 					aria-pressed={allLActive}
 					title="Expand all comments to full detail"
-					onclick={onExpandAll}
+					onclick={async (e) => {
+						const anchor = e.currentTarget as HTMLElement;
+						const rectBefore = anchor.getBoundingClientRect();
+						const snap = snapshotLayout();
+						onExpandAll();
+						await animateLayoutChange(snap, anchor, rectBefore);
+					}}
 				>
 					Expand all
 				</button>
