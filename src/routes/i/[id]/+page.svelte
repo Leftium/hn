@@ -10,7 +10,7 @@
 	} from '$lib/item-view-history';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
-	import { onMount } from 'svelte';
+	import { onMount, tick } from 'svelte';
 	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 	import 'open-props/style';
 	import dayjs from 'dayjs';
@@ -114,6 +114,74 @@
 	function setHighlight(ids: Iterable<number>): void {
 		highlightedIds.clear();
 		for (const id of ids) highlightedIds.add(id);
+	}
+
+	// --- Height animation (Phase 4.5) ---
+	// FLIP-style height transitions for row LOD changes. Callers:
+	//   1. Call snapshotRowHeights() BEFORE mutating lodState.
+	//   2. Mutate state (setLOD / toggleLOD / etc).
+	//   3. await animateRowHeights(snapshot, anchorEl?, rectBefore?) which
+	//      tick()s, scroll-anchors to anchorEl (keeping it visually fixed),
+	//      then transitions height from old→new on any <d-comment> whose
+	//      height changed.
+	//
+	// Currently wired only for row click (L↔M). Strip-expand and bulk
+	// actions will extend in a follow-up commit — they need wrapper-based
+	// animation because they swap <d-comment-strip> for N <d-comment> rows
+	// (different DOM nodes, not just height changes).
+	const ANIM_DURATION_MS = 350;
+
+	function snapshotRowHeights(): Map<number, number> {
+		const out = new Map<number, number>();
+		const els = document.querySelectorAll<HTMLElement>('d-comment[data-comment-id]');
+		for (const el of els) {
+			const id = Number(el.dataset.commentId);
+			if (Number.isFinite(id)) out.set(id, el.offsetHeight);
+		}
+		return out;
+	}
+
+	async function animateRowHeights(
+		heightsBefore: Map<number, number>,
+		anchorEl?: HTMLElement | null,
+		rectBefore?: DOMRect
+	): Promise<void> {
+		await tick();
+
+		// Scroll anchoring — keep anchor element visually in place after layout shift.
+		if (anchorEl && rectBefore) {
+			const rectAfter = anchorEl.getBoundingClientRect();
+			const shift = rectAfter.top - rectBefore.top;
+			if (Math.abs(shift) > 1) window.scrollBy(0, shift);
+		}
+
+		// Animate each changed row's height from before→after.
+		for (const [id, hBefore] of heightsBefore) {
+			const el = document.querySelector<HTMLElement>(`d-comment[data-comment-id="${id}"]`);
+			if (!el) continue;
+			const hAfter = el.offsetHeight;
+			if (hBefore === hAfter) continue;
+
+			el.style.overflow = 'hidden';
+			el.style.height = `${hBefore}px`;
+			el.style.transitionProperty = 'none';
+			// Force reflow so the height:hBefore takes effect before transition enables.
+			void el.offsetHeight;
+			el.style.transitionProperty = 'height';
+			el.style.transitionDuration = `${ANIM_DURATION_MS}ms`;
+			el.style.transitionTimingFunction = 'ease-out';
+			el.style.height = `${hAfter}px`;
+
+			const cleanup = () => {
+				el.style.height = '';
+				el.style.overflow = '';
+				el.style.transitionProperty = '';
+				el.style.transitionDuration = '';
+				el.style.transitionTimingFunction = '';
+			};
+			el.addEventListener('transitionend', cleanup, { once: true });
+			setTimeout(cleanup, ANIM_DURATION_MS + 50);
+		}
 	}
 
 	// Production click-to-toggle: click an L row → M; click an M row → L.
@@ -610,12 +678,33 @@
 		class:dead={isDead}
 		class:new-comment={isNew}
 		class:just-clicked={highlightedIds.has(comment.id)}
+		data-comment-id={comment.id}
 		data-lod={lod}
 		data-level={level}
 		data-index-level={devUiEnabled ? treeIndex.levelOf.get(comment.id) : undefined}
 		tabindex={lod === 'S' ? undefined : 0}
-		onclick={(e: MouseEvent) => onRowClick(e, comment.id, lod)}
-		onkeydown={(e: KeyboardEvent) => onRowKeydown(e, comment.id, lod)}
+		onclick={async (e: MouseEvent) => {
+			if (lod === 'S') return; // S-solo path delegates to inner button
+			const t = e.target as HTMLElement | null;
+			if (t?.closest('a, button, input, textarea, [contenteditable]')) return;
+			if (lod !== 'L' && lod !== 'M') return;
+			const el = e.currentTarget as HTMLElement;
+			const rectBefore = el.getBoundingClientRect();
+			const snapshot = snapshotRowHeights();
+			onRowClick(e, comment.id, lod);
+			await animateRowHeights(snapshot, el, rectBefore);
+		}}
+		onkeydown={async (e: KeyboardEvent) => {
+			if (e.key !== 'Enter' && e.key !== ' ') return;
+			const t = e.target as HTMLElement | null;
+			if (t?.closest('a, button, input, textarea, [contenteditable]')) return;
+			if (lod !== 'L' && lod !== 'M') return;
+			const el = e.currentTarget as HTMLElement;
+			const rectBefore = el.getBoundingClientRect();
+			const snapshot = snapshotRowHeights();
+			onRowKeydown(e, comment.id, lod);
+			await animateRowHeights(snapshot, el, rectBefore);
+		}}
 	>
 		{#if lod === 'S'}
 			<!-- Ungrouped S row (?group=0 dev path): colored block placeholder,
