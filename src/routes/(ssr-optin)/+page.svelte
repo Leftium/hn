@@ -23,7 +23,8 @@
 			This legacy HckrWeb link may need JavaScript to redirect to the new URL format. If the address
 			looks like <code>hw.leftium.com/#/item/123</code>, open
 			<code>hn.leftium.com/i/123</code> instead. For the current HckrNews list, open
-			<a href={hckrnewsPath}>hn.leftium.com/hckrnews</a>.
+			<a href={hckrnewsPath}>hn.leftium.com/hckrnews</a>. The legacy app is still available at
+			<a href="https://hckrweb.netlify.app">hckrweb.netlify.app</a>.
 		</div>
 	</noscript>
 {/if}
