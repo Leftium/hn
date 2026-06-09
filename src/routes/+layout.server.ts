@@ -1,8 +1,12 @@
+import { getEffectiveHostname } from '$lib/effective-host';
+
 import type { LayoutServerLoad } from './$types';
 
 export const load: LayoutServerLoad = async ({ cookies, url }) => {
 	const sessionStartCookie = cookies.get('session_start');
 	const totalVisits = cookies.get('visits_total');
+
+	const effectiveHostname = getEffectiveHostname(url);
 
 	const result: {
 		isLegacyHost: boolean;
@@ -11,7 +15,7 @@ export const load: LayoutServerLoad = async ({ cookies, url }) => {
 	} = {
 		// hw.leftium.com is the legacy HckrWeb host; no-JS visitors there likely arrived
 		// from old hash-based links that cannot be redirected on the server.
-		isLegacyHost: url.hostname === 'hw.leftium.com'
+		isLegacyHost: effectiveHostname === 'hw.leftium.com'
 	};
 
 	if (sessionStartCookie) {
