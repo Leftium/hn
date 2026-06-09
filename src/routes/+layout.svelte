@@ -50,13 +50,31 @@
 		}
 	};
 
+	function redirectLegacyHashRoute() {
+		if (!browser) return;
+
+		// Old HckrWeb links used hash routes like #/item/123. URL fragments are not sent
+		// to the server, so SSR cannot see them and the browser must convert them.
+		const match = window.location.hash.match(/^#\/item\/(\d+)\/?$/);
+		if (match) {
+			window.location.replace(resolve(`/i/${match[1]}`));
+		}
+	}
+
 	$effect(() => {
 		if (!browser) return;
 
+		redirectLegacyHashRoute();
+		// Catch legacy links pasted into an already-loaded tab, which only changes the
+		// fragment and does not reload the app.
+		window.addEventListener('hashchange', redirectLegacyHashRoute);
 		updateSessionTime();
 		const interval = setInterval(updateSessionTime, 60000);
 
-		return () => clearInterval(interval);
+		return () => {
+			window.removeEventListener('hashchange', redirectLegacyHashRoute);
+			clearInterval(interval);
+		};
 	});
 
 	let clientSessionExpires = $state<number | null>(untrack(() => data.sessionExpires) || null);
@@ -102,6 +120,17 @@
 		window.location.href = '/';
 	}
 </script>
+
+{#if data.isLegacyHost}
+	<!-- Only shown when SSR renders the legacy host; with JavaScript enabled, hash links redirect above. -->
+	<noscript>
+		<div class="legacy-route-message">
+			This legacy HckrWeb link may need JavaScript to redirect to the new URL format. If the address
+			looks like <code>hw.leftium.com/#/item/123</code>, open
+			<code>hn.leftium.com/i/123</code> instead.
+		</div>
+	</noscript>
+{/if}
 
 {@render children?.()}
 
@@ -224,6 +253,16 @@
 	footer a:hover {
 		color: light-dark(#ff6600, #ff9944);
 		text-decoration: underline;
+	}
+
+	.legacy-route-message {
+		max-width: 42.875em;
+		margin: var(--size-4) auto;
+		padding: var(--size-3) var(--size-4);
+		background: light-dark(#fff4cc, #332900);
+		border: 1px solid light-dark(#e6c765, #6f5b18);
+		border-radius: var(--radius-2);
+		color: light-dark(#4d3a00, #ffe8a3);
 	}
 
 	.session-item {
