@@ -95,7 +95,14 @@ export async function fetchHN(
 				url = `${baseUrl}?next=${currentId}`;
 			}
 
-			const response = await fetchFn(url);
+			const response = await fetchFn(url, {
+				headers: {
+					'User-Agent': 'Mozilla/5.0'
+				}
+			});
+			if (!response.ok) {
+				throw new Error(`Failed to fetch ${url}: ${response.status}`);
+			}
 			const html = await response.text();
 			const parsed = parseHNHTML(html);
 

@@ -82,7 +82,9 @@ export const load: PageServerLoad = async ({ fetch, params, cookies }) => {
 		result = apiResult.stories;
 		nextRange = apiResult.nextRange;
 		startIndex = (startPage - 1) * 30;
-	} else if (['shownew', 'noobstories', 'pool', 'classic', 'launches', 'active'].includes(source)) {
+	} else if (
+		['shownew', 'asknew', 'noobstories', 'pool', 'classic', 'launches', 'active'].includes(source)
+	) {
 		let startId: string | undefined;
 		let pageCount = defaultPages;
 		let itemIndex = 0;
