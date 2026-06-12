@@ -1,5 +1,5 @@
 import { error } from '@sveltejs/kit';
-import { fetchHnpwaItem } from '$lib/fetch-hnpwa';
+import { fetchHNItemTree } from '$lib/fetch-hnpwa';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ params, url, fetch }) => {
@@ -12,7 +12,7 @@ export const load: PageServerLoad = async ({ params, url, fetch }) => {
 	const cacheBust = url.searchParams.has('cb');
 
 	try {
-		const item = await fetchHnpwaItem(id, fetch, cacheBust);
+		const item = await fetchHNItemTree(id, fetch, cacheBust);
 		return { item };
 	} catch (e) {
 		error(404, `Item ${id} not found`);

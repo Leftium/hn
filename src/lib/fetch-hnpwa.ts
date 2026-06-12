@@ -22,22 +22,75 @@ export interface HnpwaItem {
 	level: number;
 }
 
-const HNPWA_API_BASE = 'https://api.hnpwa.com/v0';
+interface FirebaseItem {
+	id: number;
+	deleted?: boolean;
+	type?: 'job' | 'story' | 'comment' | 'poll' | 'pollopt';
+	by?: string;
+	time?: number;
+	text?: string;
+	dead?: boolean;
+	parent?: number;
+	poll?: number;
+	kids?: number[];
+	url?: string;
+	score?: number;
+	title?: string;
+	parts?: number[];
+	descendants?: number;
+}
 
-export async function fetchHnpwaItem(
+function toHnpwaType(type: FirebaseItem['type']): HnpwaItem['type'] {
+	if (type === 'story') return 'link';
+	if (type === 'job' || type === 'poll') return type;
+	return 'comment';
+}
+
+export async function fetchHNItemTree(
 	id: number,
 	fetchFn: typeof fetch = fetch,
-	/** When true, append a cache-busting query param to bypass the HNPWA CDN cache. */
 	cacheBust = false
 ): Promise<HnpwaItem> {
-	const qs = cacheBust ? `?_=${Date.now()}` : '';
-	const response = await fetchFn(`${HNPWA_API_BASE}/item/${id}.json${qs}`);
+	const fetchFirebaseItem = async (itemId: number): Promise<FirebaseItem | null> => {
+		const qs = cacheBust ? `?_${Date.now()}` : '';
+		const response = await fetchFn(
+			`https://hacker-news.firebaseio.com/v0/item/${itemId}.json${qs}`
+		);
 
-	if (!response.ok) {
-		throw new Error(`HNPWA API error: ${response.status} ${response.statusText}`);
-	}
+		if (!response.ok) {
+			throw new Error(`HN Firebase API error: ${response.status} ${response.statusText}`);
+		}
 
-	return response.json();
+		return response.json();
+	};
+
+	const buildItem = async (itemId: number, level = 0): Promise<HnpwaItem> => {
+		const item = await fetchFirebaseItem(itemId);
+
+		if (!item) {
+			throw new Error(`HN item ${itemId} not found`);
+		}
+
+		const comments = await Promise.all((item.kids ?? []).map((kid) => buildItem(kid, level + 1)));
+
+		return {
+			id: item.id,
+			title: item.title ?? '',
+			points: item.score ?? null,
+			user: item.by ?? null,
+			time: item.time ?? 0,
+			time_ago: '',
+			type: toHnpwaType(item.type),
+			content: item.dead ? '<p>[dead]' : (item.text ?? ''),
+			url: item.url ?? (item.type === 'comment' && item.parent ? `item?id=${item.parent}` : ''),
+			domain: item.url ? domainify(item.url) : '',
+			comments,
+			comments_count: item.descendants ?? comments.length,
+			level
+		};
+	};
+
+	return buildItem(id);
 }
 
 /**
