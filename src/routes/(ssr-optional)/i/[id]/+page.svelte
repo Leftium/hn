@@ -51,16 +51,16 @@
 	// Selectors and default-state init read from this index; they never walk the raw tree.
 	// "Visible" matches isHiddenComment() — the index reflects exactly what the renderer draws.
 	interface TreeIndex {
-		parentOf: Map<number, number>; // comment id → parent id (post id for top-level)
-		childrenOf: Map<number, number[]>; // comment/post id → visible child ids in tree order
-		levelOf: Map<number, number>; // post → 0, top-level → 1, etc.
+		parentOf: SvelteMap<number, number>; // comment id → parent id (post id for top-level)
+		childrenOf: SvelteMap<number, number[]>; // comment/post id → visible child ids in tree order
+		levelOf: SvelteMap<number, number>; // post → 0, top-level → 1, etc.
 		allIds: number[]; // every visible comment id in depth-first pre-order (excludes post)
 	}
 
 	const treeIndex = $derived.by<TreeIndex>(() => {
-		const parentOf = new Map<number, number>();
-		const childrenOf = new Map<number, number[]>();
-		const levelOf = new Map<number, number>([[item.id, 0]]);
+		const parentOf = new SvelteMap<number, number>();
+		const childrenOf = new SvelteMap<number, number[]>();
+		const levelOf = new SvelteMap<number, number>([[item.id, 0]]);
 		const allIds: number[] = [];
 
 		function walk(comments: HNItem[], parentId: number, level: number) {
@@ -151,9 +151,9 @@
 
 	interface LayoutSnapshot {
 		// Height of each mounted <d-comment> (keyed by comment id).
-		rowHeights: Map<number, number>;
+		rowHeights: SvelteMap<number, number>;
 		// Height of each mounted <d-comment-strip> (keyed by data-strip-key).
-		stripHeights: Map<string, number>;
+		stripHeights: SvelteMap<string, number>;
 		// Total <d-comments> wrapper height (O(1) FLIP target).
 		containerHeight: number;
 		// Viewport band at snapshot time for culling offscreen animations.
@@ -162,12 +162,12 @@
 	}
 
 	function snapshotLayout(): LayoutSnapshot {
-		const rowHeights = new Map<number, number>();
+		const rowHeights = new SvelteMap<number, number>();
 		for (const el of document.querySelectorAll<HTMLElement>('d-comment[data-comment-id]')) {
 			const id = Number(el.dataset.commentId);
 			if (Number.isFinite(id)) rowHeights.set(id, el.offsetHeight);
 		}
-		const stripHeights = new Map<string, number>();
+		const stripHeights = new SvelteMap<string, number>();
 		for (const el of document.querySelectorAll<HTMLElement>('d-comment-strip[data-strip-key]')) {
 			const key = el.dataset.stripKey;
 			if (key) stripHeights.set(key, el.offsetHeight);
@@ -687,10 +687,27 @@
 	// null = first visit (no highlights). Set on mount from IndexedDB.
 	let newCommentThreshold = $state<number | null>(null);
 	let newCommentCount = $state(0);
+	type LodDevToolsWindow = Window & {
+		__lod?: {
+			readonly state: typeof lodState;
+			readonly index: TreeIndex;
+			setLOD: typeof setLOD;
+			toggleLOD: typeof toggleLOD;
+			self: typeof self;
+			parentOf: typeof parentOf;
+			ancestorsOf: typeof ancestorsOf;
+			childrenOf: typeof childrenOf;
+			descendantsOf: typeof descendantsOf;
+			subtreeOf: typeof subtreeOf;
+			siblingsOf: typeof siblingsOf;
+			allComments: typeof allComments;
+		};
+	};
+	type NavigationWindow = Window & { navigation?: { canGoBack?: boolean } };
 
 	onMount(async () => {
 		// Expose LOD primitives to window for DevTools testing (removed in Phase 5).
-		(window as any).__lod = {
+		(window as LodDevToolsWindow).__lod = {
 			get state() {
 				return lodState;
 			},
@@ -746,7 +763,7 @@
 	function goBack() {
 		// If opened in a new tab, history.length is typically 1-2 (browser-dependent).
 		// navigation.canGoBack is the most reliable check where available.
-		const nav = (window as any).navigation;
+		const nav = (window as NavigationWindow).navigation;
 		if (nav && typeof nav.canGoBack === 'boolean') {
 			if (nav.canGoBack) {
 				history.back();
@@ -822,7 +839,6 @@
 		target directly. The svelte-ignore comments below acknowledge this
 		tradeoff rather than the element being keyboard-inaccessible.
 	-->
-	<!-- svelte-ignore a11y_click_events_have_key_events -->
 	<!-- svelte-ignore a11y_no_static_element_interactions -->
 	<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
 	<d-comment
@@ -977,6 +993,7 @@
 			</d-comment-meta>
 			{#if comment.content && !isDead}
 				<d-comment-body>
+					<!-- eslint-disable-next-line svelte/no-at-html-tags -- HN API returns intentional comment HTML -->
 					{@html comment.content}
 				</d-comment-body>
 			{/if}
@@ -1141,10 +1158,12 @@
 		<d-item-header>
 			{#if item.title}
 				<d-title>
+					<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- external article/HN URL -->
 					<a href={articleUrl} class="title-link">{item.title}</a>
 				</d-title>
 				{#if domain}
 					<d-url-row>
+						<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- external article/HN URL -->
 						<a href={articleUrl} class="url-link">
 							{domain}<s-path>{urlPath}</s-path>
 						</a>
@@ -1157,6 +1176,7 @@
 					class:high={visibleCommentCount >= 100}
 					class:mid={visibleCommentCount >= 50 && visibleCommentCount < 100}
 				>
+					<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- external HN URL -->
 					<a href={hnItemUrl} class="meta-link">
 						{visibleCommentCount}
 						{@render message()}
@@ -1175,23 +1195,26 @@
 				<s-time>{relativeTime(item.time)}</s-time>
 				{#if item.user}
 					<s-user>
+						<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- external HN URL -->
 						by <a href={hnUserUrl} class="meta-link">{item.user}</a>
 					</s-user>
 				{/if}
 				<s-hn-link>
+					<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- external HN URL -->
 					<a href={hnItemUrl} class="hn-link">news.ycombinator.com/item?id={item.id}</a>
 				</s-hn-link>
 			</d-metadata>
 
 			{#if parentStoryId}
 				<d-parent>
-					<a href="/i/{parentStoryId}" class="meta-link">← parent story</a>
+					<a href={resolve(`/i/${parentStoryId}`)} class="meta-link">← parent story</a>
 				</d-parent>
 			{/if}
 		</d-item-header>
 
 		{#if item.content}
 			<d-item-body>
+				<!-- eslint-disable-next-line svelte/no-at-html-tags -- HN API returns intentional item HTML -->
 				{@html item.content}
 			</d-item-body>
 		{/if}
