@@ -1,12 +1,9 @@
 /**
- * Fetch HN item data (story/comment + nested comment tree) from the HNPWA API.
- * https://api.hnpwa.com/v0/item/{id}.json
- *
- * HNPWA returns comments in HN's native ranked order (not chronological),
- * with the full nested tree in a single request.
+ * Fetch HN item data (story/comment + nested comment tree) from the official
+ * HN Firebase API.
  */
 
-export interface HnpwaItem {
+export interface HNItem {
 	id: number;
 	title: string;
 	points: number | null;
@@ -17,7 +14,7 @@ export interface HnpwaItem {
 	content: string;
 	url: string;
 	domain: string;
-	comments: HnpwaItem[];
+	comments: HNItem[];
 	comments_count: number;
 	level: number;
 }
@@ -40,7 +37,7 @@ interface FirebaseItem {
 	descendants?: number;
 }
 
-function toHnpwaType(type: FirebaseItem['type']): HnpwaItem['type'] {
+function toHNItemType(type: FirebaseItem['type']): HNItem['type'] {
 	if (type === 'story') return 'link';
 	if (type === 'job' || type === 'poll') return type;
 	return 'comment';
@@ -48,14 +45,10 @@ function toHnpwaType(type: FirebaseItem['type']): HnpwaItem['type'] {
 
 export async function fetchHNItemTree(
 	id: number,
-	fetchFn: typeof fetch = fetch,
-	cacheBust = false
-): Promise<HnpwaItem> {
+	fetchFn: typeof fetch = fetch
+): Promise<HNItem> {
 	const fetchFirebaseItem = async (itemId: number): Promise<FirebaseItem | null> => {
-		const qs = cacheBust ? `?_${Date.now()}` : '';
-		const response = await fetchFn(
-			`https://hacker-news.firebaseio.com/v0/item/${itemId}.json${qs}`
-		);
+		const response = await fetchFn(`https://hacker-news.firebaseio.com/v0/item/${itemId}.json`);
 
 		if (!response.ok) {
 			throw new Error(`HN Firebase API error: ${response.status} ${response.statusText}`);
@@ -64,7 +57,7 @@ export async function fetchHNItemTree(
 		return response.json();
 	};
 
-	const buildItem = async (itemId: number, level = 0): Promise<HnpwaItem> => {
+	const buildItem = async (itemId: number, level = 0): Promise<HNItem> => {
 		const item = await fetchFirebaseItem(itemId);
 
 		if (!item) {
@@ -80,7 +73,7 @@ export async function fetchHNItemTree(
 			user: item.by ?? null,
 			time: item.time ?? 0,
 			time_ago: '',
-			type: toHnpwaType(item.type),
+			type: toHNItemType(item.type),
 			content: item.dead ? '<p>[dead]' : (item.text ?? ''),
 			url: item.url ?? (item.type === 'comment' && item.parent ? `item?id=${item.parent}` : ''),
 			domain: item.url ? domainify(item.url) : '',
@@ -96,9 +89,6 @@ export async function fetchHNItemTree(
 /**
  * Extract domain + optional first path segment from a URL.
  * Ported from hw.leftium.com's domainify() logic.
- *
- * HNPWA provides a `domain` field, but it's just the hostname.
- * This adds the smart first-path-segment logic (e.g. "github.com/user").
  */
 export function domainify(url: string | null | undefined): string {
 	if (!url) return '';

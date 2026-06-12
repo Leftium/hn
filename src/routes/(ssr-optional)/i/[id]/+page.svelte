@@ -1,6 +1,6 @@
 <script lang="ts">
-	import type { HnpwaItem } from '$lib/fetch-hnpwa';
-	import { domainify } from '$lib/fetch-hnpwa';
+	import type { HNItem } from '$lib/fetch-hn-item';
+	import { domainify } from '$lib/fetch-hn-item';
 	import {
 		getItemView,
 		recordItemView,
@@ -31,10 +31,10 @@
 
 	let { data } = $props();
 
-	const item: HnpwaItem = $derived(data.item);
+	const item: HNItem = $derived(data.item);
 	const domain = $derived(item.domain || domainify(item.url));
 
-	// Derive comment count from tree walk (HNPWA's comments_count inflates by including deleted/dead)
+	// Derive comment count from tree walk (descendants can include deleted/dead comments)
 	const visibleCommentCount = $derived(countVisibleComments(item.comments));
 
 	// --- LOD (Level of Detail) state ---
@@ -63,7 +63,7 @@
 		const levelOf = new Map<number, number>([[item.id, 0]]);
 		const allIds: number[] = [];
 
-		function walk(comments: HnpwaItem[], parentId: number, level: number) {
+		function walk(comments: HNItem[], parentId: number, level: number) {
 			const visible = comments.filter((c) => !isHiddenComment(c));
 			childrenOf.set(
 				parentId,
@@ -625,12 +625,12 @@
 		kind: 'row';
 		id: number;
 		level: number;
-		comment: HnpwaItem;
+		comment: HNItem;
 	}
 	interface StripSeg {
 		id: number;
 		level: number;
-		comment: HnpwaItem;
+		comment: HNItem;
 	}
 	interface StripItem {
 		kind: 'strip';
@@ -642,7 +642,7 @@
 	const renderList = $derived.by<RenderItem[]>(() => {
 		// First pass: flatten tree into a row list (pre-order, filtered).
 		const rows: RowItem[] = [];
-		function walk(comments: HnpwaItem[], level: number) {
+		function walk(comments: HNItem[], level: number) {
 			for (const c of comments) {
 				if (isHiddenComment(c)) continue;
 				rows.push({ kind: 'row', id: c.id, level, comment: c });
@@ -728,7 +728,7 @@
 	// External URL for the posted article (not HN self-links)
 	const articleUrl = $derived(item.url && !item.url.startsWith('item?id=') ? item.url : hnItemUrl);
 
-	// HNPWA comment-type items have url like "item?id=NNNNN"
+	// Comment-type items use parent item URLs like "item?id=NNNNN".
 	const parentStoryId = $derived(
 		item.type === 'comment' && item.url ? item.url.match(/item\?id=(\d+)/)?.[1] : null
 	);
@@ -803,7 +803,7 @@
 	</svg>
 {/snippet}
 
-{#snippet commentRow(comment: HnpwaItem, level: number)}
+{#snippet commentRow(comment: HNItem, level: number)}
 	{@const lod = getLOD(comment.id)}
 	{@const isDead = comment.content === '<p>[dead]'}
 	{@const isDeleted = !comment.user}

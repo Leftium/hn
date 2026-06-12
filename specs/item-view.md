@@ -6,7 +6,7 @@ Render HN items (stories, comments, polls) directly within the HN app, replacing
 
 ## Motivation
 
-- **Correct ordering + freshness**: HNPWA preserves HN's native comment ranking order, with cache-busting for fresh data on every request.
+- **Correct ordering + freshness**: the official HN Firebase API provides current item metadata and `kids[]` order for building the nested comment tree.
 - **Clean route**: `/i/[id]` vs `/#/item/[id]` (hash-based).
 - **Single app**: No context switch to a separate site.
 - **Foundation for future enhancements** that will diverge significantly from hw.leftium.com's rendering.
@@ -19,15 +19,13 @@ Render HN items (stories, comments, polls) directly within the HN app, replacing
 
 ## Data Strategy
 
-### Primary: HNPWA API
+### Primary: HN Firebase API
 
 ```
-GET https://api.hnpwa.com/v0/item/{id}.json
+GET https://hacker-news.firebaseio.com/v0/item/{id}.json
 ```
 
-Single request returns the full item with recursively nested `comments[]` in HN's native ranked order (not chronological). This preserves the same comment ordering as the official HN site.
-
-**Cache-busting**: HNPWA's CDN caches responses for 20 minutes (`s-maxage=1200`). Appending `?_=${Date.now()}` to the URL bypasses the CDN cache, ensuring fresh data on every request. This eliminates the need for a separate Firebase freshness delta.
+Firebase returns flat items with `kids[]` child IDs. The loader recursively fetches each child and builds the nested `comments[]` tree locally, preserving HN's native comment order.
 
 **Story response shape:**
 
@@ -80,19 +78,19 @@ Single request returns the full item with recursively nested `comments[]` in HN'
 
 ### API Comparison
 
-|                    | HNPWA                  | Algolia           | Firebase        |
-| ------------------ | ---------------------- | ----------------- | --------------- |
-| **Comment order**  | HN native (ranked)     | Chronological     | N/A (flat IDs)  |
-| **Single request** | Yes (nested tree)      | Yes (nested tree) | No (1 per item) |
-| **Freshness**      | Fresh (cache-busted)   | Near-real-time    | Real-time       |
-| **Chosen role**    | Primary (initial load) | Not used          | Not used        |
+|                    | HNPWA              | Algolia           | Firebase             |
+| ------------------ | ------------------ | ----------------- | -------------------- |
+| **Comment order**  | HN native          | Chronological     | HN native via `kids` |
+| **Single request** | Yes (nested tree)  | Yes (nested tree) | No (1 per item)      |
+| **Freshness**      | Stale in practice  | Near-real-time    | Real-time            |
+| **Chosen role**    | Not used           | Not used          | Primary              |
 
 ## V1 Scope (Minimal Viable)
 
 ### Item Header
 
 - Title (linked to external URL if present)
-- Domain extraction (HNPWA provides `domain`; enhanced with `domainify` for smart first-path segment)
+- Domain extraction via `domainify` for smart first-path segment
 - Points count
 - Author (linked to HN profile)
 - Relative timestamp (using dayjs, already a dependency)
@@ -100,7 +98,7 @@ Single request returns the full item with recursively nested `comments[]` in HN'
 
 ### Comment Tree
 
-- Recursive rendering from HNPWA's pre-nested `comments[]`
+- Recursive rendering from the locally built Firebase `comments[]` tree
 - Indented nesting to convey thread structure
 - Each comment shows: author, relative time, HTML content
 - OP highlighting: visually distinguish comments by the item's original author
@@ -109,7 +107,7 @@ Single request returns the full item with recursively nested `comments[]` in HN'
 
 - Dead items: show `[dead]` stub
 - Deleted items: show `[deleted]` stub
-- Comment-as-root: when `/i/[id]` points to a comment, render it as a standalone item with its sub-thread (link to parent story via HNPWA's `url` field)
+- Comment-as-root: when `/i/[id]` points to a comment, render it as a standalone item with its sub-thread and link to the parent item
 - Items with no comments: show "No comments." empty state
 - Item not found: error state
 
@@ -133,5 +131,4 @@ Single request returns the full item with recursively nested `comments[]` in HN'
   - Item rendering: `assets/js/hw.js` (`hw.comments.render()`, lines 179-331)
   - Templates: `assets/templates/post-comments.mustache`, `comments.mustache`
   - API client: `assets/js/libs/hnapi.js`
-- **HNPWA API**: `https://api.hnpwa.com/v0/item/{id}.json`
 - **HN Firebase API docs**: `https://github.com/HackerNews/API`

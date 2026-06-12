@@ -112,10 +112,7 @@
 		? dayjs.unix(timeFrontpage).diff(dayjs.unix(time), 'hour')
 		: 0}
 
-	{@const isActive = Date.now() / 1000 - time < 15 * 24 * 60 * 60}
-	{@const link = dead
-		? `https://news.ycombinator.com/item?id=${id}`
-		: resolve(`/i/${id}${isActive ? '?cb' : ''}`)}
+	{@const link = dead ? `https://news.ycombinator.com/item?id=${id}` : resolve(`/i/${id}`)}
 	{@const domain = story.domain}
 	{@const path = story.url
 		?.replace(/^https:\/\/(www.)?/, '')
