@@ -1019,7 +1019,9 @@
 							{comment.user}
 						</a>
 					{/if}
-					<s-time>{relativeTime(comment.time)}</s-time>
+					<a href="https://news.ycombinator.com/item?id={comment.id}" class="time-link">
+						<s-time>{relativeTime(comment.time)}</s-time>
+					</a>
 				{:else if isDeleted}
 					<s-author class="deleted">[deleted]</s-author>
 				{:else}
@@ -1032,7 +1034,9 @@
 					{#if isNew}
 						<s-new-badge>NEW</s-new-badge>
 					{/if}
-					<s-time>{relativeTime(comment.time)}</s-time>
+					<a href="https://news.ycombinator.com/item?id={comment.id}" class="time-link">
+						<s-time>{relativeTime(comment.time)}</s-time>
+					</a>
 				{/if}
 				{#if lod === 'L'}
 					{@const hasKids = directChildrenOf(comment.id).length > 0}
@@ -1853,6 +1857,15 @@
 		color: light-dark(#d89899, #a06060);
 		font-style: italic;
 		font-size: var(--font-size-0);
+		text-decoration: none;
+
+		&:hover {
+			text-decoration: underline;
+		}
+	}
+
+	.time-link {
+		color: inherit;
 		text-decoration: none;
 
 		&:hover {
