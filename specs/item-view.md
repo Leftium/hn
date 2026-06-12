@@ -78,12 +78,12 @@ Firebase returns flat items with `kids[]` child IDs. The loader recursively fetc
 
 ### API Comparison
 
-|                    | HNPWA              | Algolia           | Firebase             |
-| ------------------ | ------------------ | ----------------- | -------------------- |
-| **Comment order**  | HN native          | Chronological     | HN native via `kids` |
-| **Single request** | Yes (nested tree)  | Yes (nested tree) | No (1 per item)      |
-| **Freshness**      | Stale in practice  | Near-real-time    | Real-time            |
-| **Chosen role**    | Not used           | Not used          | Primary              |
+|                    | HNPWA             | Algolia           | Firebase             |
+| ------------------ | ----------------- | ----------------- | -------------------- |
+| **Comment order**  | HN native         | Chronological     | HN native via `kids` |
+| **Single request** | Yes (nested tree) | Yes (nested tree) | No (1 per item)      |
+| **Freshness**      | Stale in practice | Near-real-time    | Real-time            |
+| **Chosen role**    | Not used          | Not used          | Primary              |
 
 ## V1 Scope (Minimal Viable)
 

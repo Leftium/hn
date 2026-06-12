@@ -43,10 +43,7 @@ function toHNItemType(type: FirebaseItem['type']): HNItem['type'] {
 	return 'comment';
 }
 
-export async function fetchHNItemTree(
-	id: number,
-	fetchFn: typeof fetch = fetch
-): Promise<HNItem> {
+export async function fetchHNItemTree(id: number, fetchFn: typeof fetch = fetch): Promise<HNItem> {
 	const fetchFirebaseItem = async (itemId: number): Promise<FirebaseItem | null> => {
 		const response = await fetchFn(`https://hacker-news.firebaseio.com/v0/item/${itemId}.json`);
 
