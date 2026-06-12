@@ -10,7 +10,7 @@ export const load: PageServerLoad = async ({ params, fetch }) => {
 	}
 
 	try {
-		const item = await fetchHNItemTree(id, fetch);
+		const item = await fetchHNItemTree(id, fetch, { maxDepth: 2 });
 		return { item };
 	} catch {
 		error(404, `Item ${id} not found`);

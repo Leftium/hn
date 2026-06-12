@@ -8,6 +8,7 @@
 		countVisibleComments,
 		isHiddenComment
 	} from '$lib/item-view-history';
+	import { browser } from '$app/environment';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import { onMount, tick } from 'svelte';
@@ -31,11 +32,13 @@
 
 	let { data } = $props();
 
-	const item: HNItem = $derived(data.item);
+	let fullItem = $state<HNItem | null>(null);
+	const item: HNItem = $derived(fullItem ?? data.item);
 	const domain = $derived(item.domain || domainify(item.url));
 
 	// Derive comment count from tree walk (descendants can include deleted/dead comments)
 	const visibleCommentCount = $derived(countVisibleComments(item.comments));
+	const displayedCommentCount = $derived(Math.max(item.comments_count, visibleCommentCount));
 
 	// --- LOD (Level of Detail) state ---
 	// Single source of truth for per-comment render state. Missing key ⇒ default 'L'.
@@ -626,16 +629,19 @@
 		id: number;
 		level: number;
 		comment: HNItem;
+		placeholder?: boolean;
 	}
 	interface StripSeg {
 		id: number;
 		level: number;
 		comment: HNItem;
+		placeholder?: boolean;
 	}
 	interface StripItem {
 		kind: 'strip';
 		minLevel: number; // shallowest member level (used for indent anchor)
 		segments: StripSeg[];
+		placeholder?: boolean;
 	}
 	type RenderItem = RowItem | StripItem;
 
@@ -646,7 +652,17 @@
 			for (const c of comments) {
 				if (isHiddenComment(c)) continue;
 				rows.push({ kind: 'row', id: c.id, level, comment: c });
-				if (c.comments.length > 0) walk(c.comments, level + 1);
+				if (c.comments.length > 0) {
+					walk(c.comments, level + 1);
+				} else if (sGroupingEnabled && (c.kids?.length ?? 0) > 0) {
+					rows.push({
+						kind: 'row',
+						id: -c.id,
+						level: level + 1,
+						comment: c,
+						placeholder: true
+					});
+				}
 			}
 		}
 		walk(item.comments, 1);
@@ -667,12 +683,18 @@
 			result.push({
 				kind: 'strip',
 				minLevel,
-				segments: run.map((r) => ({ id: r.id, level: r.level, comment: r.comment }))
+				placeholder: run.every((r) => r.placeholder),
+				segments: run.map((r) => ({
+					id: r.id,
+					level: r.level,
+					comment: r.comment,
+					placeholder: r.placeholder
+				}))
 			});
 			run = [];
 		};
 		for (const row of rows) {
-			if (getLOD(row.id) === 'S') {
+			if (row.placeholder || getLOD(row.id) === 'S') {
 				run.push(row);
 			} else {
 				flushRun();
@@ -704,8 +726,110 @@
 		};
 	};
 	type NavigationWindow = Window & { navigation?: { canGoBack?: boolean } };
+	let hydrateRun = 0;
+	const HYDRATE_BATCH_SIZE = 12;
+	const HYDRATE_DEPTH = 2;
 
-	onMount(async () => {
+	function collectUnloadedParents(comment: HNItem, seen: { has(id: number): boolean }): number[] {
+		const ids: number[] = [];
+
+		function walk(node: HNItem) {
+			if (node.comments.length === 0 && node.kids.length > 0 && !seen.has(node.id)) {
+				ids.push(node.id);
+				return;
+			}
+
+			for (const child of node.comments) {
+				walk(child);
+			}
+		}
+
+		walk(comment);
+		return ids;
+	}
+
+	function findComment(root: HNItem, commentId: number): HNItem | null {
+		function walk(comments: HNItem[]): HNItem | null {
+			for (const comment of comments) {
+				if (comment.id === commentId) return comment;
+				const found = walk(comment.comments);
+				if (found) return found;
+			}
+			return null;
+		}
+
+		return walk(root.comments);
+	}
+
+	function mergeHydratedItems(root: HNItem, hydratedItems: HNItem[]): HNItem {
+		const byId = new Map(hydratedItems.map((hydratedItem) => [hydratedItem.id, hydratedItem]));
+
+		function mergeNode(node: HNItem): HNItem {
+			const hydrated = byId.get(node.id);
+			if (hydrated) return { ...hydrated, level: node.level };
+			return { ...node, comments: node.comments.map(mergeNode) };
+		}
+
+		return { ...root, comments: root.comments.map(mergeNode) };
+	}
+
+	async function loadHydratedBatch(itemId: number, ids: number[]): Promise<HNItem[] | null> {
+		const response = await fetch(resolve(`/i/${itemId}/children`), {
+			method: 'POST',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({ ids, depth: HYDRATE_DEPTH })
+		});
+		if (!response.ok) return null;
+
+		const { items } = (await response.json()) as { items: HNItem[] };
+		return items.filter((loadedItem) => ids.includes(loadedItem.id));
+	}
+
+	async function hydrateItem(itemId: number): Promise<void> {
+		const run = ++hydrateRun;
+		const seen = new SvelteSet<number>();
+		const previous = await getItemView(itemId);
+		if (run !== hydrateRun) return;
+
+		if (previous) {
+			newCommentThreshold = previous.viewedAt;
+			newCommentCount = countNewComments(item.comments, previous.viewedAt);
+		} else {
+			newCommentThreshold = null;
+			newCommentCount = 0;
+		}
+
+		await recordItemView(itemId, visibleCommentCount);
+
+		for (const topLevelComment of data.item.comments) {
+			while (run === hydrateRun && data.item.id === itemId) {
+				const currentTopLevelComment = findComment(item, topLevelComment.id);
+				if (!currentTopLevelComment) break;
+
+				const ids = collectUnloadedParents(currentTopLevelComment, seen).slice(0, HYDRATE_BATCH_SIZE);
+				if (ids.length === 0) break;
+				for (const id of ids) seen.add(id);
+
+				const hydratedItems = await loadHydratedBatch(itemId, ids);
+				if (run !== hydrateRun || data.item.id !== itemId || !hydratedItems) break;
+
+				fullItem = mergeHydratedItems(item, hydratedItems);
+				if (previous) {
+					newCommentCount = countNewComments(fullItem.comments, previous.viewedAt);
+				}
+				await recordItemView(itemId, countVisibleComments(fullItem.comments));
+				await tick();
+			}
+		}
+	}
+
+	$effect(() => {
+		const itemId = data.item.id;
+		fullItem = null;
+		if (browser) void hydrateItem(itemId);
+	});
+
+	onMount(() => {
 		// Expose LOD primitives to window for DevTools testing (removed in Phase 5).
 		(window as LodDevToolsWindow).__lod = {
 			get state() {
@@ -725,16 +849,6 @@
 			siblingsOf,
 			allComments
 		};
-
-		const previous = await getItemView(item.id);
-
-		if (previous) {
-			newCommentThreshold = previous.viewedAt;
-			newCommentCount = countNewComments(item.comments, previous.viewedAt);
-		}
-
-		// Record this visit (always, even on first view)
-		await recordItemView(item.id, visibleCommentCount);
 	});
 
 	const hnItemUrl = $derived(`https://news.ycombinator.com/item?id=${item.id}`);
@@ -1034,6 +1148,7 @@
 		data-min-level={strip.minLevel}
 		data-strip-size={strip.segments.length}
 		data-strip-key="s-{strip.segments[0].id}"
+		class:placeholder={strip.placeholder}
 	>
 		<d-strip-segs>
 			{#each strip.segments as seg (seg.id)}
@@ -1042,12 +1157,15 @@
 				<button
 					type="button"
 					class="strip-seg"
+					class:placeholder={seg.placeholder}
 					style:--seg-color={segColor}
 					style:--seg-width="{segWidth}px"
 					data-seg-level={seg.level}
 					aria-label="expand strip to M (contains comment {seg.id} level {seg.level})"
 					title="level {seg.level} — expand strip"
+					disabled={seg.placeholder}
 					onclick={async (e) => {
+						if (seg.placeholder) return;
 						const anchor = (e.currentTarget as HTMLElement).closest(
 							'd-comment-strip'
 						) as HTMLElement | null;
@@ -1173,12 +1291,12 @@
 
 			<d-metadata>
 				<s-comments
-					class:high={visibleCommentCount >= 100}
-					class:mid={visibleCommentCount >= 50 && visibleCommentCount < 100}
+					class:high={displayedCommentCount >= 100}
+					class:mid={displayedCommentCount >= 50 && displayedCommentCount < 100}
 				>
 					<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- external HN URL -->
 					<a href={hnItemUrl} class="meta-link">
-						{visibleCommentCount}
+						{displayedCommentCount}
 						{@render message()}
 					</a>
 				</s-comments>
@@ -1975,6 +2093,15 @@
 		&:hover {
 			background: var(--seg-color, #888);
 		}
+	}
+
+	button.strip-seg.placeholder {
+		cursor: default;
+		opacity: 0.45;
+	}
+
+	button.strip-seg.placeholder:hover {
+		background: color-mix(in srgb, var(--seg-color, #888) 70%, transparent);
 	}
 
 	/* --- Dev UI: LOD toggle buttons (Phase 3, removed in Phase 5) ---

@@ -17,6 +17,11 @@ export interface HNItem {
 	comments: HNItem[];
 	comments_count: number;
 	level: number;
+	kids: number[];
+}
+
+interface FetchHNItemTreeOptions {
+	maxDepth?: number;
 }
 
 interface FirebaseItem {
@@ -43,7 +48,13 @@ function toHNItemType(type: FirebaseItem['type']): HNItem['type'] {
 	return 'comment';
 }
 
-export async function fetchHNItemTree(id: number, fetchFn: typeof fetch = fetch): Promise<HNItem> {
+export async function fetchHNItemTree(
+	id: number,
+	fetchFn: typeof fetch = fetch,
+	options: FetchHNItemTreeOptions = {}
+): Promise<HNItem> {
+	const maxDepth = options.maxDepth ?? Infinity;
+
 	const fetchFirebaseItem = async (itemId: number): Promise<FirebaseItem | null> => {
 		const response = await fetchFn(`https://hacker-news.firebaseio.com/v0/item/${itemId}.json`);
 
@@ -61,7 +72,10 @@ export async function fetchHNItemTree(id: number, fetchFn: typeof fetch = fetch)
 			throw new Error(`HN item ${itemId} not found`);
 		}
 
-		const comments = await Promise.all((item.kids ?? []).map((kid) => buildItem(kid, level + 1)));
+		const comments =
+			level < maxDepth
+				? await Promise.all((item.kids ?? []).map((kid) => buildItem(kid, level + 1)))
+				: [];
 
 		return {
 			id: item.id,
@@ -76,7 +90,8 @@ export async function fetchHNItemTree(id: number, fetchFn: typeof fetch = fetch)
 			domain: item.url ? domainify(item.url) : '',
 			comments,
 			comments_count: item.descendants ?? comments.length,
-			level
+			level,
+			kids: item.kids ?? []
 		};
 	};
 
