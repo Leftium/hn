@@ -6,6 +6,12 @@ const COOKIE_OPTIONS = {
 	maxAge: 60 * 60 * 24 * 365
 };
 
+function parseOptionalPositiveInt(value: FormDataEntryValue | string | null | undefined): string | null {
+	if (!value) return null;
+	const parsed = parseInt(value.toString(), 10);
+	return Number.isFinite(parsed) && parsed > 0 ? parsed.toString() : null;
+}
+
 export const load: PageServerLoad = async ({ cookies, url }) => {
 	const visitHistory = cookies.get('visits_history')?.split('-').map(Number) ?? [];
 	const total = parseInt(cookies.get('visits_total') ?? '0', 10);
@@ -36,6 +42,8 @@ export const load: PageServerLoad = async ({ cookies, url }) => {
 		total,
 		source: url.searchParams.get('from') || 'hckrnews',
 		pagesPerLoad: parseInt(cookies.get('pages_per_load') ?? '1', 10),
+		minKarma: parseOptionalPositiveInt(cookies.get('min_user_karma')),
+		minAgeYears: parseOptionalPositiveInt(cookies.get('min_user_age_years')),
 		selectedOverride: isOverridden && thresholdCookie ? parseInt(thresholdCookie, 10) : null
 	};
 };
@@ -46,9 +54,23 @@ export const actions: Actions = {
 		const pagesPerLoad = data.get('pages_per_load');
 		const thresholdSource = data.get('threshold_source');
 		const customDatetime = data.get('custom_datetime');
+		const minKarma = parseOptionalPositiveInt(data.get('min_user_karma'));
+		const minAgeYears = parseOptionalPositiveInt(data.get('min_user_age_years'));
 
 		if (pagesPerLoad) {
 			cookies.set('pages_per_load', pagesPerLoad.toString(), COOKIE_OPTIONS);
+		}
+
+		if (minKarma) {
+			cookies.set('min_user_karma', minKarma, COOKIE_OPTIONS);
+		} else {
+			cookies.delete('min_user_karma', { path: '/' });
+		}
+
+		if (minAgeYears) {
+			cookies.set('min_user_age_years', minAgeYears, COOKIE_OPTIONS);
+		} else {
+			cookies.delete('min_user_age_years', { path: '/' });
 		}
 
 		if (thresholdSource === 'custom' && customDatetime) {

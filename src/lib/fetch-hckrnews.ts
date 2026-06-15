@@ -18,6 +18,7 @@ interface HckrNewsItem {
 	link_text: string;
 	link?: string;
 	source?: string;
+	submitter?: string;
 	points: number;
 	comments: number;
 	time: number;
@@ -61,7 +62,7 @@ export async function fetchHckrnews(
 		comments: item.comments || 0,
 		time: item.time,
 		time_frontpage: item.date,
-		user: '',
+		user: item.submitter ?? '',
 		dead: item.dead
 	}));
 

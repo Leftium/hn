@@ -3,12 +3,168 @@
 	import { FEED_NAMES, FEED_SOURCES } from '$lib';
 	let { data } = $props();
 	import 'open-props/style';
-	import { untrack } from 'svelte';
+	import { onMount, untrack } from 'svelte';
+	import { browser } from '$app/environment';
 	import { resolve } from '$app/paths';
+	import { page } from '$app/state';
 	import dayjs from 'dayjs';
+
+	type HNUser = {
+		karma: number;
+		created: number;
+		cachedAt: number;
+	};
+
+	const USER_CACHE_PREFIX = 'hn-user:';
+	const USER_CACHE_TTL = 1000 * 60 * 60 * 24 * 7;
+	const USER_FETCH_CONCURRENCY = 10;
 
 	const cutoffTime = untrack(() => data.visitData?.previousSessionOverride ?? null);
 	const feedSource = $derived(FEED_SOURCES.find((f) => f.id === data.source));
+	const minKarma = $derived(parseThreshold(page.url.searchParams.get('min_karma'), data.minKarma));
+	const minAgeYears = $derived(
+		parseThreshold(page.url.searchParams.get('min_age_years'), data.minAgeYears)
+	);
+	const userThresholdEnabled = $derived(minKarma !== null || minAgeYears !== null);
+	let userThresholdLoadingStarted = $state(false);
+	let userDetails = $state<Record<string, HNUser | null>>({});
+	let loadedUsernames = $state<Record<string, true>>({});
+
+	onMount(() => {
+		const startLoading = () => {
+			userThresholdLoadingStarted = true;
+		};
+
+		if ('requestIdleCallback' in window) {
+			const idleId = window.requestIdleCallback(startLoading, { timeout: 1000 });
+			return () => window.cancelIdleCallback(idleId);
+		}
+
+		const timeoutId = window.setTimeout(startLoading, 250);
+		return () => window.clearTimeout(timeoutId);
+	});
+
+	function parseThreshold(urlValue: string | null, fallback: number | string | null | undefined) {
+		const value = urlValue ?? fallback;
+		if (value === null || value === undefined || value === '') return null;
+		const parsed = parseInt(value.toString(), 10);
+		return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+	}
+
+	function getUserCacheKey(username: string) {
+		return `${USER_CACHE_PREFIX}${username}`;
+	}
+
+	function readCachedUser(username: string): HNUser | null | undefined {
+		if (!browser) return undefined;
+		try {
+			const raw = localStorage.getItem(getUserCacheKey(username));
+			if (!raw) return undefined;
+			const cached = JSON.parse(raw) as HNUser;
+			if (Date.now() - cached.cachedAt > USER_CACHE_TTL) {
+				localStorage.removeItem(getUserCacheKey(username));
+				return undefined;
+			}
+			return cached;
+		} catch {
+			return undefined;
+		}
+	}
+
+	function writeCachedUser(username: string, user: HNUser | null) {
+		if (!browser) return;
+		try {
+			localStorage.setItem(getUserCacheKey(username), JSON.stringify(user));
+		} catch {
+			// Cache writes are opportunistic; failed writes should not affect rendering.
+		}
+	}
+
+	async function fetchHNUser(username: string): Promise<HNUser | null> {
+		if (!browser) return null;
+		try {
+			const response = await fetch(
+				`https://hacker-news.firebaseio.com/v0/user/${encodeURIComponent(username)}.json`
+			);
+			if (!response.ok) return null;
+			const user = await response.json();
+			if (!user || typeof user.karma !== 'number' || typeof user.created !== 'number') return null;
+			return { karma: user.karma, created: user.created, cachedAt: Date.now() };
+		} catch {
+			return null;
+		}
+	}
+
+	async function loadUsers(usernames: string[]) {
+		let nextDetails = { ...userDetails };
+		let nextLoaded = { ...loadedUsernames };
+		const toFetch: string[] = [];
+
+		for (const username of usernames) {
+			if (nextLoaded[username]) continue;
+			const cached = readCachedUser(username);
+			nextLoaded[username] = true;
+			if (cached !== undefined) {
+				nextDetails[username] = cached;
+			} else {
+				toFetch.push(username);
+			}
+		}
+
+		userDetails = nextDetails;
+		loadedUsernames = nextLoaded;
+
+		let index = 0;
+		await Promise.all(
+			Array.from({ length: USER_FETCH_CONCURRENCY }, async () => {
+				while (index < toFetch.length) {
+					const username = toFetch[index++];
+					const user = await fetchHNUser(username);
+					if (user) writeCachedUser(username, user);
+					userDetails = { ...userDetails, [username]: user };
+				}
+			})
+		);
+	}
+
+	function passesUserThreshold(story: NormalizedStory) {
+		if (!userThresholdEnabled || !userThresholdLoadingStarted || !story.user) return true;
+		if (!(story.user in loadedUsernames)) return true;
+		const user = userDetails[story.user];
+		if (!user) return true;
+
+		const passesKarma = minKarma !== null && user.karma >= minKarma;
+		const passesAge =
+			minAgeYears !== null && dayjs.unix(user.created).isBefore(dayjs().subtract(minAgeYears, 'year'));
+
+		return passesKarma || passesAge;
+	}
+
+	function userThresholdTitle(story: NormalizedStory) {
+		const user = story.user ? userDetails[story.user] : null;
+		if (!user) return undefined;
+		return `Submitter ${story.user}: ${user.karma} karma, joined ${relativeTime(user.created)} ago`;
+	}
+
+	function withThresholdParams(path: string) {
+		const params = new URLSearchParams();
+		if (page.url.searchParams.has('min_karma')) {
+			params.set('min_karma', page.url.searchParams.get('min_karma') ?? '');
+		}
+		if (page.url.searchParams.has('min_age_years')) {
+			params.set('min_age_years', page.url.searchParams.get('min_age_years') ?? '');
+		}
+		const query = params.toString();
+		return query ? `${path}?${query}` : path;
+	}
+
+	$effect(() => {
+		if (!browser || !userThresholdEnabled || !userThresholdLoadingStarted) return;
+		const usernames = [...new Set((data.stories ?? []).map((story) => story.user).filter(Boolean))];
+		untrack(() => {
+			void loadUsers(usernames);
+		});
+	});
 
 	function relativeTime(time: number | string): string {
 		const num = typeof time === 'string' ? parseInt(time, 10) : time;
@@ -118,10 +274,15 @@
 		?.replace(/^https:\/\/(www.)?/, '')
 		.replace(domain || '', '')
 		.replace(/\/$/, '')}
+	{@const userThresholdFailed = !passesUserThreshold(story)}
 
 	{@const isNew = cutoffTime && (timeFrontpage ? timeFrontpage > cutoffTime : time > cutoffTime)}
 
-	<d-item class:new-item={isNew}>
+	<d-item
+		class:new-item={isNew}
+		class:user-threshold-failed={userThresholdFailed}
+		title={userThresholdTitle(story)}
+	>
 		<a href={link}>
 			<d-title class:dead={dead || deleted}>{title}</d-title>
 			<d-metadata>
@@ -207,13 +368,13 @@
 	{#if data.previousDate || data.nextRange}
 		<d-item class="more-link">
 			{#if data.previousDate}
-				<a href={resolve(`/${data.source}/${data.previousDate}`)} rel="nofollow">
+				<a href={resolve(withThresholdParams(`/${data.source}/${data.previousDate}`))} rel="nofollow">
 					<d-metadata>
 						<s-url>More... {data.previousDate}</s-url>
 					</d-metadata>
 				</a>
 			{:else if data.nextRange}
-				<a href={resolve(`/${data.source}/${data.nextRange}`)} rel="nofollow">
+				<a href={resolve(withThresholdParams(`/${data.source}/${data.nextRange}`))} rel="nofollow">
 					<d-metadata>
 						<s-url>More...</s-url>
 					</d-metadata>
@@ -260,6 +421,20 @@
 
 		&.new-item:hover {
 			border-left-color: rgba(255, 102, 0, 0.8);
+		}
+
+		&.user-threshold-failed {
+			opacity: 0.18;
+			filter: blur(1.5px);
+			transition:
+				opacity 120ms ease,
+				filter 120ms ease;
+		}
+
+		&.user-threshold-failed:hover,
+		&.user-threshold-failed:focus-within {
+			opacity: 1;
+			filter: none;
 		}
 
 		&.config-info {

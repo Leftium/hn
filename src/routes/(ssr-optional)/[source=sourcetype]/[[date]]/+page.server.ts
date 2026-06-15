@@ -11,6 +11,8 @@ export const load: PageServerLoad = async ({ fetch, params, cookies }) => {
 	const totalVisits = cookies.get('visits_total');
 	const pagesPerLoadCookie = cookies.get('pages_per_load');
 	const thresholdCookie = cookies.get('new_item_threshold');
+	const minKarmaCookie = cookies.get('min_user_karma');
+	const minAgeYearsCookie = cookies.get('min_user_age_years');
 
 	const defaultPages = pagesPerLoadCookie ? parseInt(pagesPerLoadCookie, 10) : 1;
 
@@ -136,6 +138,8 @@ export const load: PageServerLoad = async ({ fetch, params, cookies }) => {
 		startIndex,
 		visitData,
 		source,
+		minKarma: minKarmaCookie ? parseInt(minKarmaCookie, 10) : null,
+		minAgeYears: minAgeYearsCookie ? parseInt(minAgeYearsCookie, 10) : null,
 		newStoryCount
 	};
 };

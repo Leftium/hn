@@ -9,6 +9,8 @@
 	const currentSource = untrack(() => data?.source || 'hckrnews');
 	let manualOverride = $state<number | null>(untrack(() => data?.selectedOverride ?? null));
 	let datetimeTimestamp = $state<number | null>(untrack(() => data?.selectedOverride ?? null));
+	let minKarma = $state(untrack(() => data?.minKarma ?? ''));
+	let minAgeYears = $state(untrack(() => data?.minAgeYears ?? ''));
 
 	let formElement: HTMLFormElement;
 	let datetimeInput: HTMLInputElement;
@@ -135,6 +137,43 @@
 				{/each}
 			</div>
 		{/each}
+
+		<hr />
+
+		<h2>User thresholds <span class="subheader">(visually de-emphasize lower-trust posts)</span></h2>
+
+		<p class="explanation">
+			Stories stay visible, but are faded after load unless the submitter meets either enabled threshold.
+		</p>
+
+		<div class="threshold-grid">
+			<label>
+				<span>Minimum karma</span>
+				<input
+					type="number"
+					name="min_user_karma"
+					min="1"
+					inputmode="numeric"
+					placeholder="off"
+					bind:value={minKarma}
+					onchange={autoSubmit}
+				/>
+			</label>
+
+			<label>
+				<span>Minimum account age</span>
+				<input
+					type="number"
+					name="min_user_age_years"
+					min="1"
+					inputmode="numeric"
+					placeholder="off"
+					bind:value={minAgeYears}
+					onchange={autoSubmit}
+				/>
+				<span class="field-suffix">years</span>
+			</label>
+		</div>
 
 		<hr />
 
@@ -347,6 +386,27 @@
 	.radio-group-inline label {
 		display: inline-block;
 		white-space: nowrap;
+	}
+
+	.threshold-grid {
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+		gap: var(--size-3);
+		max-width: 36rem;
+	}
+
+	.threshold-grid label {
+		display: flex;
+		align-items: center;
+		gap: var(--size-2);
+	}
+
+	.threshold-grid input {
+		width: 7rem;
+	}
+
+	.field-suffix {
+		color: light-dark(#666, #999);
 	}
 
 	.default-label {
