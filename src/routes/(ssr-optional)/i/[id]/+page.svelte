@@ -1,6 +1,6 @@
 <script lang="ts">
 	import type { HNItem } from '$lib/fetch-hn-item';
-	import { domainify } from '$lib/fetch-hn-item';
+	import { domainify, fetchHNItemTree } from '$lib/fetch-hn-item';
 	import {
 		getItemView,
 		recordItemView,
@@ -30,15 +30,17 @@
 		'#3aa8a0' // teal
 	];
 
-	let { data } = $props();
-
+	let item = $state<HNItem | null>(null);
+	let itemError = $state<string | null>(null);
 	let fullItem = $state<HNItem | null>(null);
-	const item: HNItem = $derived(fullItem ?? data.item);
-	const domain = $derived(item.domain || domainify(item.url));
+	const displayItem = $derived(fullItem ?? item);
+	const domain = $derived(displayItem ? displayItem.domain || domainify(displayItem.url) : '');
 
 	// Derive comment count from tree walk (descendants can include deleted/dead comments)
-	const visibleCommentCount = $derived(countVisibleComments(item.comments));
-	const displayedCommentCount = $derived(Math.max(item.comments_count, visibleCommentCount));
+	const visibleCommentCount = $derived(displayItem ? countVisibleComments(displayItem.comments) : 0);
+	const displayedCommentCount = $derived(
+		displayItem ? Math.max(displayItem.comments_count, visibleCommentCount) : 0
+	);
 
 	// --- LOD (Level of Detail) state ---
 	// Single source of truth for per-comment render state. Missing key ⇒ default 'L'.
@@ -63,7 +65,7 @@
 	const treeIndex = $derived.by<TreeIndex>(() => {
 		const parentOf = new SvelteMap<number, number>();
 		const childrenOf = new SvelteMap<number, number[]>();
-		const levelOf = new SvelteMap<number, number>([[item.id, 0]]);
+		const levelOf = new SvelteMap<number, number>(displayItem ? [[displayItem.id, 0]] : []);
 		const allIds: number[] = [];
 
 		function walk(comments: HNItem[], parentId: number, level: number) {
@@ -79,7 +81,7 @@
 				if (c.comments.length > 0) walk(c.comments, c.id, level + 1);
 			}
 		}
-		walk(item.comments, item.id, 1);
+		if (displayItem) walk(displayItem.comments, displayItem.id, 1);
 
 		return { parentOf, childrenOf, levelOf, allIds };
 	});
@@ -482,7 +484,7 @@
 	// effect never subscribes to flag changes — otherwise flipping A2 would
 	// re-trigger this effect and clobber the handler's writes.
 	$effect(() => {
-		void item.id; // track item changes
+		void displayItem?.id; // track item changes
 		lodState.clear();
 		highlightedIds.clear();
 		ungroupAllFlag = false;
@@ -665,7 +667,8 @@
 				}
 			}
 		}
-		walk(item.comments, 1);
+		if (!displayItem) return [];
+		walk(displayItem.comments, 1);
 
 		// Second pass: merge adjacent S runs into strips.
 		// When grouping is disabled (?group=0), skip merging — solo-S comments
@@ -774,14 +777,9 @@
 	}
 
 	async function loadHydratedBatch(itemId: number, ids: number[]): Promise<HNItem[] | null> {
-		const response = await fetch(resolve(`/i/${itemId}/children`), {
-			method: 'POST',
-			headers: { 'content-type': 'application/json' },
-			body: JSON.stringify({ ids, depth: HYDRATE_DEPTH })
-		});
-		if (!response.ok) return null;
-
-		const { items } = (await response.json()) as { items: HNItem[] };
+		const items = await Promise.all(
+			ids.map((id) => fetchHNItemTree(id, fetch, { maxDepth: HYDRATE_DEPTH }))
+		);
 		return items.filter((loadedItem) => ids.includes(loadedItem.id));
 	}
 
@@ -789,11 +787,11 @@
 		const run = ++hydrateRun;
 		const seen = new SvelteSet<number>();
 		const previous = await getItemView(itemId);
-		if (run !== hydrateRun) return;
+		if (run !== hydrateRun || !displayItem) return;
 
 		if (previous) {
 			newCommentThreshold = previous.viewedAt;
-			newCommentCount = countNewComments(item.comments, previous.viewedAt);
+			newCommentCount = countNewComments(displayItem.comments, previous.viewedAt);
 		} else {
 			newCommentThreshold = null;
 			newCommentCount = 0;
@@ -801,9 +799,9 @@
 
 		await recordItemView(itemId, visibleCommentCount);
 
-		for (const topLevelComment of data.item.comments) {
-			while (run === hydrateRun && data.item.id === itemId) {
-				const currentTopLevelComment = findComment(item, topLevelComment.id);
+		for (const topLevelComment of displayItem.comments) {
+			while (run === hydrateRun && displayItem?.id === itemId) {
+				const currentTopLevelComment = displayItem ? findComment(displayItem, topLevelComment.id) : null;
 				if (!currentTopLevelComment) break;
 
 				const ids = collectUnloadedParents(currentTopLevelComment, seen).slice(0, HYDRATE_BATCH_SIZE);
@@ -811,22 +809,42 @@
 				for (const id of ids) seen.add(id);
 
 				const hydratedItems = await loadHydratedBatch(itemId, ids);
-				if (run !== hydrateRun || data.item.id !== itemId || !hydratedItems) break;
+				if (run !== hydrateRun || displayItem?.id !== itemId || !hydratedItems) break;
 
-				fullItem = mergeHydratedItems(item, hydratedItems);
+				const nextFullItem = displayItem ? mergeHydratedItems(displayItem, hydratedItems) : null;
+				fullItem = nextFullItem;
+				if (!nextFullItem) break;
 				if (previous) {
-					newCommentCount = countNewComments(fullItem.comments, previous.viewedAt);
+					newCommentCount = countNewComments(nextFullItem.comments, previous.viewedAt);
 				}
-				await recordItemView(itemId, countVisibleComments(fullItem.comments));
+				await recordItemView(itemId, countVisibleComments(nextFullItem.comments));
 				await tick();
 			}
 		}
 	}
 
 	$effect(() => {
-		const itemId = data.item.id;
+		const id = parseInt(page.params.id ?? '', 10);
+		if (!browser || !Number.isFinite(id) || id <= 0) return;
+
+		let cancelled = false;
+		item = null;
 		fullItem = null;
-		if (browser) void hydrateItem(itemId);
+		itemError = null;
+
+		void fetchHNItemTree(id, fetch, { maxDepth: 2 })
+			.then((loadedItem) => {
+				if (cancelled) return;
+				item = loadedItem;
+				void hydrateItem(id);
+			})
+			.catch(() => {
+				if (!cancelled) itemError = `Item ${id} not found`;
+			});
+
+		return () => {
+			cancelled = true;
+		};
 	});
 
 	onMount(() => {
@@ -851,23 +869,29 @@
 		};
 	});
 
-	const hnItemUrl = $derived(`https://news.ycombinator.com/item?id=${item.id}`);
+	const hnItemUrl = $derived(
+		displayItem ? `https://news.ycombinator.com/item?id=${displayItem.id}` : 'https://news.ycombinator.com/'
+	);
 	const hnUserUrl = $derived(
-		item.user ? `https://news.ycombinator.com/user?id=${item.user}` : null
+		displayItem?.user ? `https://news.ycombinator.com/user?id=${displayItem.user}` : null
 	);
 
 	// External URL for the posted article (not HN self-links)
-	const articleUrl = $derived(item.url && !item.url.startsWith('item?id=') ? item.url : hnItemUrl);
+	const articleUrl = $derived(
+		displayItem?.url && !displayItem.url.startsWith('item?id=') ? displayItem.url : hnItemUrl
+	);
 
 	// Comment-type items use parent item URLs like "item?id=NNNNN".
 	const parentStoryId = $derived(
-		item.type === 'comment' && item.url ? item.url.match(/item\?id=(\d+)/)?.[1] : null
+		displayItem?.type === 'comment' && displayItem.url
+			? displayItem.url.match(/item\?id=(\d+)/)?.[1]
+			: null
 	);
 
 	// Extract path portion of URL for display (after domain)
 	const urlPath = $derived(
-		item.url && !item.url.startsWith('item?id=')
-			? item.url
+		displayItem?.url && !displayItem.url.startsWith('item?id=')
+			? displayItem.url
 					.replace(/^https?:\/\/(www\.)?/, '')
 					.replace(domain || '', '')
 					.replace(/\/$/, '')
@@ -938,7 +962,7 @@
 	{@const lod = getLOD(comment.id)}
 	{@const isDead = comment.content === '<p>[dead]'}
 	{@const isDeleted = !comment.user}
-	{@const isOp = !isDead && !!comment.user && comment.user === item.user}
+	{@const isOp = !isDead && !!comment.user && comment.user === displayItem?.user}
 	{@const isNew = newCommentThreshold !== null && comment.time > newCommentThreshold}
 	{@const indent = Math.min(level - 1, MAX_INDENT)}
 	{@const colorIndex = (level - 1) % LEVEL_COLORS.length}
@@ -1233,10 +1257,16 @@
 {/snippet}
 
 <svelte:head>
-	<title>{item.title || 'HN Reader'}</title>
+	<title>{displayItem?.title || 'HN Reader'}</title>
 </svelte:head>
 
 <main>
+	{#if itemError}
+		<d-empty>{itemError}</d-empty>
+	{:else if !displayItem}
+		<d-empty>Loading item...</d-empty>
+	{:else}
+		{@const item = displayItem}
 	<d-header>
 		<d-nav>
 			<button type="button" class="back-btn" onclick={goBack}> ← Back </button>
@@ -1342,7 +1372,7 @@
 		{/if}
 	</d-header>
 
-	{#if item.comments.length > 0}
+		{#if displayItem.comments.length > 0}
 		<d-comments>
 			{#each renderList as renderItem (renderItem.kind === 'row' ? `r-${renderItem.id}` : `s-${renderItem.segments[0].id}`)}
 				{#if renderItem.kind === 'row'}
@@ -1354,6 +1384,7 @@
 		</d-comments>
 	{:else}
 		<d-empty>No comments.</d-empty>
+	{/if}
 	{/if}
 </main>
 
