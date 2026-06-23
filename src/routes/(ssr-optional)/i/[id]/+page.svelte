@@ -1806,11 +1806,14 @@
 
 	d-item-body {
 		display: block;
-		padding: var(--size-2) var(--size-2) var(--size-3);
+		margin: 0 var(--size-2) var(--size-3);
+		padding: var(--size-2);
 		font-size: var(--font-size-1);
 		line-height: 1.5;
 		color: light-dark(#333, #ddd);
-		border-top: 1px solid light-dark(#e6e6df, #3a3a3a);
+		background: light-dark(#fafaf8, #202020);
+		border: 1px solid light-dark(#deded6, #3a3a3a);
+		border-radius: 4px;
 	}
 
 	d-item-body :global {
