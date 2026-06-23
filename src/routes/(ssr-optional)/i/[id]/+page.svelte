@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { HNItem } from '$lib/fetch-hn-item';
 	import { domainify, fetchHNItemTree } from '$lib/fetch-hn-item';
+	import { fetchHnpwaItem } from '$lib/fetch-hnpwa';
 	import {
 		getItemView,
 		recordItemView,
@@ -11,7 +12,7 @@
 	import { browser } from '$app/environment';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
-	import { onMount, tick } from 'svelte';
+	import { onMount, tick, untrack } from 'svelte';
 	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 	import 'open-props/style';
 	import dayjs from 'dayjs';
@@ -46,14 +47,14 @@
 	let item = $state<HNItem | null>(null);
 	let itemError = $state<string | null>(null);
 	let fullItem = $state<HNItem | null>(null);
+	let lodItemId = $state<number | null>(null);
+	const firebaseLoadedIds = new SvelteSet<number>();
 	const displayItem = $derived(fullItem ?? item);
 	const domain = $derived(displayItem ? displayItem.domain || domainify(displayItem.url) : '');
 
-	// Derive comment count from tree walk (descendants can include deleted/dead comments)
+	// Used for view history; displayed count stays on API metadata to avoid hydration churn.
 	const visibleCommentCount = $derived(displayItem ? countVisibleComments(displayItem.comments) : 0);
-	const displayedCommentCount = $derived(
-		displayItem ? Math.max(displayItem.comments_count, visibleCommentCount) : 0
-	);
+	const displayedCommentCount = $derived(displayItem?.comments_count ?? 0);
 
 	// --- LOD (Level of Detail) state ---
 	// Single source of truth for per-comment render state. Missing key ⇒ default 'L'.
@@ -490,18 +491,27 @@
 		setLOD(S, 'S');
 	}
 
-	// Runs on mount and whenever item.id changes (story navigation). Resets
-	// any prior entries so manual cycling from a previous story doesn't leak
-	// across. ungroupAllFlag also resets per-item for consistent defaults.
-	// We pass `false` explicitly (rather than reading ungroupAllFlag) so the
-	// effect never subscribes to flag changes — otherwise flipping A2 would
-	// re-trigger this effect and clobber the handler's writes.
+	// Runs only when the item id changes. Resets any prior entries so manual
+	// cycling from a previous story doesn't leak across, but does not reset when
+	// the same item is replaced by a fresher/hydrated tree.
 	$effect(() => {
-		void displayItem?.id; // track item changes
+		const id = displayItem?.id ?? null;
+		if (id === lodItemId) return;
+
 		lodState.clear();
 		highlightedIds.clear();
 		ungroupAllFlag = false;
-		applyDefaultPolicy(false);
+		lodItemId = id;
+		if (id !== null) untrack(() => applyDefaultPolicy(false));
+	});
+
+	// As progressively loaded comments appear, default only the new ids. Existing
+	// ids keep user-selected LOD state across HNPWA/Firebase replacement and
+	// Firebase hydration.
+	$effect(() => {
+		if (!displayItem) return;
+		const newIds = treeIndex.allIds.filter((id) => !lodState.has(id));
+		if (newIds.length > 0) applyDefaultPolicy(ungroupAllFlag, newIds);
 	});
 
 	// --- Phase 5.1: global toolbar active-states + handlers ---
@@ -750,7 +760,12 @@
 		const ids: number[] = [];
 
 		function walk(node: HNItem) {
-			if (node.comments.length === 0 && node.kids.length > 0 && !seen.has(node.id)) {
+			const hasPreviewChildren = node.comments.some((child) => !firebaseLoadedIds.has(child.id));
+			if (
+				node.kids.length > 0 &&
+				!seen.has(node.id) &&
+				(node.comments.length === 0 || hasPreviewChildren)
+			) {
 				ids.push(node.id);
 				return;
 			}
@@ -762,6 +777,35 @@
 
 		walk(comment);
 		return ids;
+	}
+
+	function markFirebaseLoaded(node: HNItem): void {
+		firebaseLoadedIds.add(node.id);
+		for (const child of node.comments) markFirebaseLoaded(child);
+	}
+
+	function mergeAdditive(freshItem: HNItem, existingItem: HNItem): HNItem {
+		const existingById = new SvelteMap<number, HNItem>();
+
+		function index(node: HNItem) {
+			existingById.set(node.id, node);
+			for (const child of node.comments) index(child);
+		}
+
+		function merge(node: HNItem): HNItem {
+			const existing = existingById.get(node.id);
+			const freshChildIds = new SvelteSet(node.comments.map((comment) => comment.id));
+			const comments = node.comments.map(merge);
+
+			for (const existingComment of existing?.comments ?? []) {
+				if (!freshChildIds.has(existingComment.id)) comments.push(existingComment);
+			}
+
+			return { ...node, comments };
+		}
+
+		index(existingItem);
+		return merge(freshItem);
 	}
 
 	function findComment(root: HNItem, commentId: number): HNItem | null {
@@ -778,11 +822,11 @@
 	}
 
 	function mergeHydratedItems(root: HNItem, hydratedItems: HNItem[]): HNItem {
-		const byId = new Map(hydratedItems.map((hydratedItem) => [hydratedItem.id, hydratedItem]));
+		const byId = new SvelteMap(hydratedItems.map((hydratedItem) => [hydratedItem.id, hydratedItem]));
 
 		function mergeNode(node: HNItem): HNItem {
 			const hydrated = byId.get(node.id);
-			if (hydrated) return { ...hydrated, level: node.level };
+			if (hydrated) return mergeAdditive({ ...hydrated, level: node.level }, node);
 			return { ...node, comments: node.comments.map(mergeNode) };
 		}
 
@@ -823,6 +867,7 @@
 
 				const hydratedItems = await loadHydratedBatch(itemId, ids);
 				if (run !== hydrateRun || displayItem?.id !== itemId || !hydratedItems) break;
+				for (const hydratedItem of hydratedItems) markFirebaseLoaded(hydratedItem);
 
 				const nextFullItem = displayItem ? mergeHydratedItems(displayItem, hydratedItems) : null;
 				fullItem = nextFullItem;
@@ -841,18 +886,48 @@
 		if (!browser || !Number.isFinite(id) || id <= 0) return;
 
 		let cancelled = false;
+		hydrateRun++;
+		firebaseLoadedIds.clear();
 		item = null;
 		fullItem = null;
 		itemError = null;
 
-		void fetchHNItemTree(id, fetch, { maxDepth: 2 })
+		let hnpwaFailed = false;
+		let firebaseLoaded = false;
+		let firebaseFailed = false;
+
+		function showErrorIfBothSourcesFailed() {
+			if (!item && hnpwaFailed && firebaseFailed) itemError = `Item ${id} not found`;
+		}
+
+		void fetchHnpwaItem(id, fetch)
+			.then((loadedItem) => {
+				if (cancelled || firebaseLoaded) return;
+				itemError = null;
+				item = loadedItem;
+			})
+			.catch((error) => {
+				if (cancelled) return;
+				hnpwaFailed = true;
+				console.warn('HNPWA item fetch failed', error);
+				showErrorIfBothSourcesFailed();
+			});
+
+		void fetchHNItemTree(id, fetch, { maxDepth: 1 })
 			.then((loadedItem) => {
 				if (cancelled) return;
-				item = loadedItem;
+				firebaseLoaded = true;
+				markFirebaseLoaded(loadedItem);
+				item =
+					displayItem?.id === loadedItem.id
+						? mergeAdditive(loadedItem, displayItem)
+						: loadedItem;
 				void hydrateItem(id);
 			})
 			.catch(() => {
-				if (!cancelled) itemError = `Item ${id} not found`;
+				if (cancelled) return;
+				firebaseFailed = true;
+				showErrorIfBothSourcesFailed();
 			});
 
 		return () => {
@@ -1002,6 +1077,7 @@
 		class:deleted={isDeleted && !isDead}
 		class:dead={isDead}
 		class:new-comment={isNew}
+		class:preview={!firebaseLoadedIds.has(comment.id)}
 		class:just-clicked={highlightedIds.has(comment.id)}
 		data-comment-id={comment.id}
 		data-lod={lod}
@@ -1812,6 +1888,15 @@
 		/* Top-level comments (depth 0) — no colored left border */
 		&.top-level {
 			border-left-color: transparent;
+		}
+
+		&.preview {
+			border-left-style: dashed;
+			border-left-color: color-mix(in srgb, var(--level-color, transparent) 35%, transparent);
+		}
+
+		&.preview.top-level {
+			box-shadow: inset 3px 0 0 light-dark(rgba(120, 130, 150, 0.2), rgba(150, 165, 190, 0.18));
 		}
 
 		&.deleted {
