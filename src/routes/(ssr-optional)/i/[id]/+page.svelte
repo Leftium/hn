@@ -31,6 +31,280 @@
 		'#3aa8a0' // teal
 	];
 
+	type PromotedRole = 'thread' | 'primary' | 'alternate';
+	type RenderHNItem = Omit<HNItem, 'comments'> & {
+		comments: RenderHNItem[];
+		originalId?: number;
+		promotedRole?: PromotedRole;
+	};
+	type PromotedCandidateType = 'archive' | 'gift' | 'mirror';
+	type PromotedConfidence = 'high' | 'medium' | 'low';
+	interface PromotedLinkCandidate {
+		url: string;
+		displayUrl: string;
+		host: string;
+		targetHost: string;
+		serviceRank: number;
+		type: PromotedCandidateType;
+		confidence: PromotedConfidence;
+		source: HNItem;
+	}
+
+	const ARCHIVE_HOSTS = new Set([
+		'archive.is',
+		'archive.today',
+		'archive.ph',
+		'archive.org',
+		'ghostarchive.org',
+		'perma.cc',
+		'megalodon.jp',
+		'webcache.googleusercontent.com',
+		'cachedview.com',
+		'wayback.archive-it.org'
+	]);
+	const X_MIRROR_HOSTS = new Set(['xcancel.com']);
+	const GIFT_LABEL_PATTERN = /\bgift\s+(?:article|link)\s*:?/i;
+
+	function decodeHtmlEntities(value: string): string {
+		return value
+			.replace(/&#x([0-9a-f]+);/gi, (_, hex: string) => String.fromCharCode(parseInt(hex, 16)))
+			.replace(/&#(\d+);/g, (_, code: string) => String.fromCharCode(parseInt(code, 10)))
+			.replace(/&amp;/g, '&')
+			.replace(/&quot;/g, '"')
+			.replace(/&#x27;/g, "'")
+			.replace(/&lt;/g, '<')
+			.replace(/&gt;/g, '>');
+	}
+
+	function escapeHtml(value: string): string {
+		return value
+			.replace(/&/g, '&amp;')
+			.replace(/</g, '&lt;')
+			.replace(/>/g, '&gt;')
+			.replace(/"/g, '&quot;')
+			.replace(/'/g, '&#39;');
+	}
+
+	function normalizeHost(host: string): string {
+		return host.toLowerCase().replace(/^www\./, '');
+	}
+
+	function getHost(url: string): string {
+		try {
+			return normalizeHost(new URL(url).hostname);
+		} catch {
+			return '';
+		}
+	}
+
+	function sameHostOrSubdomain(host: string, targetHost: string): boolean {
+		return host === targetHost || host.endsWith(`.${targetHost}`);
+	}
+
+	function isArchiveHost(host: string): boolean {
+		return ARCHIVE_HOSTS.has(host) || sameHostOrSubdomain(host, 'archive.org');
+	}
+
+	function isTwitterHost(host: string): boolean {
+		return sameHostOrSubdomain(host, 'x.com') || sameHostOrSubdomain(host, 'twitter.com');
+	}
+
+	function archiveServiceRank(host: string, url: string): number {
+		if (host === 'archive.is' || host === 'archive.ph' || host === 'archive.today') return 0;
+		if (host === 'web.archive.org') return 1;
+		if (host === 'archive.org') {
+			try {
+				return new URL(url).pathname.startsWith('/web/') ? 1 : 6;
+			} catch {
+				return 6;
+			}
+		}
+		if (host === 'ghostarchive.org' || host === 'perma.cc') return 2;
+		if (host === 'megalodon.jp' || host === 'wayback.archive-it.org') return 3;
+		return 4;
+	}
+
+	function isGenericArchiveOrg(candidate: PromotedLinkCandidate): boolean {
+		return candidate.type === 'archive' && candidate.host === 'archive.org' && candidate.serviceRank >= 6;
+	}
+
+	function archiveTargetHost(url: string): string {
+		try {
+			const parsed = new URL(url);
+			const decodedPath = decodeURIComponent(`${parsed.pathname}${parsed.search}${parsed.hash}`);
+			const target = decodedPath.match(/https?:\/\/([^\s"'<>]+)/i)?.[0];
+			return target ? getHost(target) : '';
+		} catch {
+			return '';
+		}
+	}
+
+	function extractUrls(content: string): string[] {
+		const decoded = decodeHtmlEntities(content);
+		const urls = new SvelteSet<string>();
+		const hrefPattern = /href="(https?:\/\/[^"<>]+)"/gi;
+		const textPattern = /https?:\/\/[^\s"'<>]+/gi;
+		const textWithoutAnchors = decoded.replace(/<a\b[\s\S]*?<\/a>/gi, ' ');
+
+		for (const match of decoded.matchAll(hrefPattern)) urls.add(match[1]);
+		for (const match of textWithoutAnchors.matchAll(textPattern)) {
+			urls.add(match[0].replace(/[),.;:]+$/, ''));
+		}
+
+		return [...urls];
+	}
+
+	function formatSyntheticLink(candidate: PromotedLinkCandidate): string {
+		const label =
+			candidate.type === 'archive' ? 'Archive' : candidate.type === 'gift' ? 'Gift link' : 'Mirror';
+		return `<p>${label}: <a href="${escapeHtml(candidate.url)}">${escapeHtml(candidate.displayUrl)}</a></p>`;
+	}
+
+	function collectPromotedLinks(root: HNItem): PromotedLinkCandidate[] {
+		const storyHost = getHost(root.url);
+		const storyIsTwitter = isTwitterHost(storyHost);
+		const candidates: PromotedLinkCandidate[] = [];
+		const seen = new SvelteSet<string>();
+
+		function classify(url: string, source: HNItem): PromotedLinkCandidate | null {
+			const host = getHost(url);
+			if (!host) return null;
+			const isGift = GIFT_LABEL_PATTERN.test(decodeHtmlEntities(source.content));
+			const isArchive = isArchiveHost(host);
+			const isXMirror = X_MIRROR_HOSTS.has(host);
+
+			if (!isArchive && !isGift && !isXMirror) return null;
+
+			let type: PromotedCandidateType = 'gift';
+			let confidence: PromotedConfidence = 'medium';
+			const targetHost = isArchive ? archiveTargetHost(url) : '';
+
+			if (isArchive) {
+				type = 'archive';
+				confidence = targetHost && storyHost && sameHostOrSubdomain(targetHost, storyHost) ? 'high' : 'medium';
+			} else if (isXMirror) {
+				type = 'mirror';
+				confidence = storyIsTwitter ? 'high' : 'low';
+			} else if (storyHost && sameHostOrSubdomain(host, storyHost)) {
+				confidence = 'high';
+			}
+
+			return {
+				url,
+				displayUrl: domainify(url) || host,
+				host,
+				targetHost,
+				serviceRank: isArchive ? archiveServiceRank(host, url) : type === 'gift' ? 3 : 5,
+				type,
+				confidence,
+				source
+			};
+		}
+
+		function walk(comments: HNItem[]): void {
+			for (const comment of comments) {
+				if (isHiddenComment(comment)) continue;
+				for (const url of extractUrls(comment.content)) {
+					const key = url.toLowerCase();
+					if (seen.has(key)) continue;
+					const candidate = classify(url, comment);
+					if (!candidate) continue;
+					seen.add(key);
+					candidates.push(candidate);
+				}
+				walk(comment.comments);
+			}
+		}
+
+		walk(root.comments);
+		const archiveOrGift = candidates.filter((candidate) => candidate.type !== 'mirror');
+		const preferredArchiveOrGift = archiveOrGift.filter((candidate) => !isGenericArchiveOrg(candidate));
+		const xMirrorHigh = candidates.filter(
+			(candidate) => candidate.type === 'mirror' && candidate.confidence === 'high'
+		);
+		const primaryCandidates = preferredArchiveOrGift.length > 0 ? preferredArchiveOrGift : archiveOrGift;
+		const filtered =
+			primaryCandidates.length > 0
+				? [...primaryCandidates, ...xMirrorHigh]
+				: candidates.filter((candidate) => candidate.type === 'mirror');
+		const rank = { high: 0, medium: 1, low: 2 } satisfies Record<PromotedConfidence, number>;
+		const typeRank = { archive: 0, gift: 1, mirror: 2 } satisfies Record<PromotedCandidateType, number>;
+		const score = (candidate: PromotedLinkCandidate) =>
+			candidate.serviceRank * 10 + typeRank[candidate.type] * 3 + rank[candidate.confidence];
+
+		return filtered.sort(
+			(a, b) =>
+				score(a) - score(b) ||
+				a.source.time - b.source.time
+		);
+	}
+
+	function addPromotedLinksThread(root: HNItem): RenderHNItem {
+		function cloneNormal(node: HNItem): RenderHNItem {
+			return { ...node, comments: node.comments.map(cloneNormal) };
+		}
+
+		const promoted = collectPromotedLinks(root);
+		const renderedRoot = cloneNormal(root);
+		if (promoted.length === 0) return renderedRoot;
+
+		let nextSyntheticId = -1_000_000_000;
+		const nextId = () => nextSyntheticId--;
+		function syntheticLinkComment(
+			candidate: PromotedLinkCandidate,
+			promotedRole: PromotedRole,
+			comments: RenderHNItem[] = []
+		): RenderHNItem {
+			return {
+				title: '',
+				points: null,
+				user: candidate.source.user ?? 'unknown',
+				time: candidate.source.time,
+				time_ago: '',
+				type: 'comment',
+				content: formatSyntheticLink(candidate),
+				url: `item?id=${candidate.source.id}`,
+				domain: '',
+				comments,
+				comments_count: comments.length,
+				level: promotedRole === 'primary' ? 2 : 3,
+				kids: [],
+				id: nextId(),
+				originalId: candidate.source.id,
+				promotedRole
+			};
+		}
+
+		const best = promoted[0];
+		if (!best) return renderedRoot;
+
+		const alternatives = promoted
+			.slice(1)
+			.map((candidate) => syntheticLinkComment(candidate, 'alternate'));
+		const primary = syntheticLinkComment(best, 'primary', alternatives);
+
+		const promotedThread: RenderHNItem = {
+			id: nextId(),
+			title: '',
+			points: null,
+			user: null,
+			time: root.time,
+			time_ago: '',
+			type: 'comment',
+			content:
+				'<p>Archive links extracted from comments. Original comments remain in discussion below.</p>',
+			url: `item?id=${root.id}`,
+			domain: '',
+			comments: [primary],
+			comments_count: promoted.length,
+			level: 1,
+			kids: [],
+			promotedRole: 'thread'
+		};
+
+		return { ...renderedRoot, comments: [promotedThread, ...renderedRoot.comments] };
+	}
+
 	function formatCommentContent(content: string): string {
 		return content
 			.split(/<p>/i)
@@ -50,6 +324,7 @@
 	let lodItemId = $state<number | null>(null);
 	const firebaseLoadedIds = new SvelteSet<number>();
 	const displayItem = $derived(fullItem ?? item);
+	const displayTree = $derived(displayItem ? addPromotedLinksThread(displayItem) : null);
 	const domain = $derived(displayItem ? displayItem.domain || domainify(displayItem.url) : '');
 
 	// Used for view history; displayed count stays on API metadata to avoid hydration churn.
@@ -73,16 +348,18 @@
 		parentOf: SvelteMap<number, number>; // comment id → parent id (post id for top-level)
 		childrenOf: SvelteMap<number, number[]>; // comment/post id → visible child ids in tree order
 		levelOf: SvelteMap<number, number>; // post → 0, top-level → 1, etc.
+		promotedRoleOf: SvelteMap<number, PromotedRole>;
 		allIds: number[]; // every visible comment id in depth-first pre-order (excludes post)
 	}
 
 	const treeIndex = $derived.by<TreeIndex>(() => {
 		const parentOf = new SvelteMap<number, number>();
 		const childrenOf = new SvelteMap<number, number[]>();
-		const levelOf = new SvelteMap<number, number>(displayItem ? [[displayItem.id, 0]] : []);
+		const levelOf = new SvelteMap<number, number>(displayTree ? [[displayTree.id, 0]] : []);
+		const promotedRoleOf = new SvelteMap<number, PromotedRole>();
 		const allIds: number[] = [];
 
-		function walk(comments: HNItem[], parentId: number, level: number) {
+		function walk(comments: RenderHNItem[], parentId: number, level: number) {
 			const visible = comments.filter((c) => !isHiddenComment(c));
 			childrenOf.set(
 				parentId,
@@ -91,13 +368,14 @@
 			for (const c of visible) {
 				parentOf.set(c.id, parentId);
 				levelOf.set(c.id, level);
+				if (c.promotedRole) promotedRoleOf.set(c.id, c.promotedRole);
 				allIds.push(c.id);
 				if (c.comments.length > 0) walk(c.comments, c.id, level + 1);
 			}
 		}
-		if (displayItem) walk(displayItem.comments, displayItem.id, 1);
+		if (displayTree) walk(displayTree.comments, displayTree.id, 1);
 
-		return { parentOf, childrenOf, levelOf, allIds };
+		return { parentOf, childrenOf, levelOf, promotedRoleOf, allIds };
 	});
 
 	// --- LOD primitives ---
@@ -481,7 +759,10 @@
 		const S: number[] = [];
 		for (const id of target) {
 			const lv = treeIndex.levelOf.get(id) ?? 0;
-			if (lv <= 1) L.push(id);
+			const promotedRole = treeIndex.promotedRoleOf.get(id);
+			if (promotedRole === 'primary') M.push(id);
+			else if (promotedRole === 'alternate') S.push(id);
+			else if (lv <= 1) L.push(id);
 			else if (lv === 2) M.push(id);
 			else if (ungroup) M.push(id);
 			else S.push(id);
@@ -653,13 +934,13 @@
 		kind: 'row';
 		id: number;
 		level: number;
-		comment: HNItem;
+		comment: RenderHNItem;
 		placeholder?: boolean;
 	}
 	interface StripSeg {
 		id: number;
 		level: number;
-		comment: HNItem;
+		comment: RenderHNItem;
 		placeholder?: boolean;
 	}
 	interface StripItem {
@@ -673,7 +954,7 @@
 	const renderList = $derived.by<RenderItem[]>(() => {
 		// First pass: flatten tree into a row list (pre-order, filtered).
 		const rows: RowItem[] = [];
-		function walk(comments: HNItem[], level: number) {
+		function walk(comments: RenderHNItem[], level: number) {
 			for (const c of comments) {
 				if (isHiddenComment(c)) continue;
 				rows.push({ kind: 'row', id: c.id, level, comment: c });
@@ -690,8 +971,8 @@
 				}
 			}
 		}
-		if (!displayItem) return [];
-		walk(displayItem.comments, 1);
+		if (!displayTree) return [];
+		walk(displayTree.comments, 1);
 
 		// Second pass: merge adjacent S runs into strips.
 		// When grouping is disabled (?group=0), skip merging — solo-S comments
@@ -1046,10 +1327,13 @@
 	</svg>
 {/snippet}
 
-{#snippet commentRow(comment: HNItem, level: number)}
+{#snippet commentRow(comment: RenderHNItem, level: number)}
 	{@const lod = getLOD(comment.id)}
 	{@const isDead = comment.content === '<p>[dead]'}
-	{@const isDeleted = !comment.user}
+	{@const isPromotedThread = comment.promotedRole === 'thread'}
+	{@const isSynthetic = !!comment.promotedRole}
+	{@const hnCommentId = comment.originalId ?? comment.id}
+	{@const isDeleted = !comment.user && !isPromotedThread}
 	{@const isOp = !isDead && !!comment.user && comment.user === displayItem?.user}
 	{@const isNew = newCommentThreshold !== null && comment.time > newCommentThreshold}
 	{@const indent = Math.min(level - 1, MAX_INDENT)}
@@ -1076,8 +1360,10 @@
 		class:op={isOp}
 		class:deleted={isDeleted && !isDead}
 		class:dead={isDead}
+		class:promoted-thread={isPromotedThread}
+		class:promoted-link={comment.promotedRole === 'primary' || comment.promotedRole === 'alternate'}
 		class:new-comment={isNew}
-		class:preview={!firebaseLoadedIds.has(comment.id)}
+		class:preview={!isSynthetic && !firebaseLoadedIds.has(comment.id)}
 		class:just-clicked={highlightedIds.has(comment.id)}
 		data-comment-id={comment.id}
 		data-lod={lod}
@@ -1125,14 +1411,17 @@
 			-->
 			<d-comment-meta>
 				<s-level style:color={LEVEL_COLORS[colorIndex]}>{level - 1}</s-level>
-				{#if isDead}
-					<a href="https://news.ycombinator.com/item?id={comment.id}" class="dead-link">[dead]</a>
+				{#if isPromotedThread}
+					<s-author>promoted links</s-author>
+					<s-promoted-badge>ARCHIVE / GIFT</s-promoted-badge>
+				{:else if isDead}
+					<a href="https://news.ycombinator.com/item?id={hnCommentId}" class="dead-link">[dead]</a>
 					{#if comment.user}
 						<a href="https://news.ycombinator.com/user?id={comment.user}" class="dead-link">
 							{comment.user}
 						</a>
 					{/if}
-					<a href="https://news.ycombinator.com/item?id={comment.id}" class="time-link">
+					<a href="https://news.ycombinator.com/item?id={hnCommentId}" class="time-link">
 						<s-time>{relativeTime(comment.time)}</s-time>
 					</a>
 				{:else if isDeleted}
@@ -1147,7 +1436,7 @@
 					{#if isNew}
 						<s-new-badge>NEW</s-new-badge>
 					{/if}
-					<a href="https://news.ycombinator.com/item?id={comment.id}" class="time-link">
+					<a href="https://news.ycombinator.com/item?id={hnCommentId}" class="time-link">
 						<s-time>{relativeTime(comment.time)}</s-time>
 					</a>
 				{/if}
@@ -1461,7 +1750,7 @@
 		{/if}
 	</d-header>
 
-		{#if displayItem.comments.length > 0}
+		{#if displayTree && displayTree.comments.length > 0}
 		<d-comments>
 			{#each renderList as renderItem (renderItem.kind === 'row' ? `r-${renderItem.id}` : `s-${renderItem.segments[0].id}`)}
 				{#if renderItem.kind === 'row'}
@@ -1920,6 +2209,19 @@
 			background: light-dark(rgba(255, 102, 0, 0.03), rgba(255, 102, 0, 0.06));
 		}
 
+		&.promoted-thread {
+			border-left: 4px solid light-dark(#9a6a00, #d7a92c);
+			background: light-dark(#fff8e1, #2b281c);
+		}
+
+		&.promoted-thread.top-level {
+			border-left-color: light-dark(#9a6a00, #d7a92c);
+		}
+
+		&.promoted-link {
+			background: light-dark(#fffdf5, #28261f);
+		}
+
 		/* Click highlight: persistent (no fade) soft-blue background applied
 		   to the most recently clicked row (L/M) or every row in a just-
 		   expanded strip. Cleared/refilled on each qualifying click via
@@ -2029,6 +2331,20 @@
 		color: #ff6600;
 		background: light-dark(rgba(255, 102, 0, 0.12), rgba(255, 102, 0, 0.2));
 		border-radius: 3px;
+		vertical-align: baseline;
+		line-height: 1.5;
+	}
+
+	s-promoted-badge {
+		display: inline-block;
+		padding: 0 0.45em;
+		font-size: 0.75em;
+		font-weight: var(--font-weight-7);
+		letter-spacing: 0.04em;
+		color: light-dark(#6f4a00, #ffd86e);
+		background: light-dark(rgba(154, 106, 0, 0.12), rgba(215, 169, 44, 0.16));
+		border: 1px solid light-dark(rgba(154, 106, 0, 0.2), rgba(215, 169, 44, 0.28));
+		border-radius: 999px;
 		vertical-align: baseline;
 		line-height: 1.5;
 	}
