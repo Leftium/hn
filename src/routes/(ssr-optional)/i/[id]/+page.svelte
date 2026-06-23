@@ -30,6 +30,19 @@
 		'#3aa8a0' // teal
 	];
 
+	function formatCommentContent(content: string): string {
+		return content
+			.split(/<p>/i)
+			.filter((paragraph) => paragraph.trim().length > 0)
+			.map((paragraph) => {
+				const quote = paragraph.match(/^\s*(?:&gt;|>)\s*([\s\S]*)$/);
+				if (quote) return `<blockquote><p>${quote[1]}</p></blockquote>`;
+				if (/^\s*<pre[\s>]/i.test(paragraph)) return paragraph;
+				return `<p>${paragraph}</p>`;
+			})
+			.join('');
+	}
+
 	let item = $state<HNItem | null>(null);
 	let itemError = $state<string | null>(null);
 	let fullItem = $state<HNItem | null>(null);
@@ -1136,7 +1149,7 @@
 			{#if comment.content && !isDead}
 				<d-comment-body>
 					<!-- eslint-disable-next-line svelte/no-at-html-tags -- HN API returns intentional comment HTML -->
-					{@html comment.content}
+					{@html formatCommentContent(comment.content)}
 				</d-comment-body>
 			{/if}
 			<!-- Dev UI (Phase 3): LOD toggle buttons. Gated by ?dev=1. Replaced in Phase 5. -->
@@ -1957,11 +1970,23 @@
 
 	d-comment-body :global {
 		p {
-			margin: 0 0 0.5em;
+			margin: 0 0 0.8em;
 
 			&:last-child {
 				margin-bottom: 0;
 			}
+		}
+
+		blockquote {
+			margin: 0.15em 0 1em;
+			padding: 0.55em 0.75em;
+			border-left: 4px solid light-dark(#c9d2e3, #52627a);
+			background: light-dark(rgba(65, 105, 160, 0.08), rgba(120, 150, 200, 0.12));
+			color: light-dark(#4d5563, #c8d0dc);
+		}
+
+		blockquote p {
+			margin-bottom: 0;
 		}
 
 		a {
