@@ -1777,7 +1777,7 @@
 
 	d-header {
 		display: block;
-		background: light-dark(#ffffff, #262626);
+		background: light-dark(#fafaf8, #202020);
 		border-bottom: 1px solid light-dark(#e6e6df, #3a3a3a);
 	}
 
@@ -2100,7 +2100,7 @@
 		font-size: var(--font-size-1);
 		line-height: 1.5;
 		color: light-dark(#333, #ddd);
-		background: light-dark(#fafaf8, #202020);
+		background: light-dark(#ffffff, #262626);
 		border: 1px solid light-dark(#deded6, #3a3a3a);
 		border-radius: 4px;
 	}
