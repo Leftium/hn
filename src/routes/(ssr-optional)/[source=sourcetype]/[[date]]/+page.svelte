@@ -21,6 +21,10 @@
 
 	const cutoffTime = untrack(() => data.visitData?.previousSessionOverride ?? null);
 	const feedSource = $derived(FEED_SOURCES.find((f) => f.id === data.source));
+	const totalStoryCount = $derived(data.stories?.length ?? 0);
+	const newStoryPercentage = $derived(
+		totalStoryCount > 0 ? Math.round((data.newStoryCount / totalStoryCount) * 100) : 0
+	);
 	const minKarma = $derived(parseThreshold(page.url.searchParams.get('min_karma'), data.minKarma));
 	const minAgeYears = $derived(
 		parseThreshold(page.url.searchParams.get('min_age_years'), data.minAgeYears)
@@ -338,8 +342,7 @@
 					{#if cutoffTime}
 						{@const timeAgo = relativeTimeAbbrev(cutoffTime).replace(' ago', '')}
 						<span class="visit-count" title={formatVisitTime(cutoffTime)}
-							>({data.newStoryCount}
-							{data.newStoryCount === 1 ? 'story' : 'stories'} in last {timeAgo})</span
+							>{newStoryPercentage}% new in last {timeAgo} ({data.newStoryCount}/{totalStoryCount})</span
 						>
 					{:else}
 						<span class="visit-count">(First visit)</span>
