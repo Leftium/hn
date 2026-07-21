@@ -30,7 +30,18 @@
 		'#d06ca0', // pink
 		'#3aa8a0' // teal
 	];
+	const AUTHOR_COLORS = [
+		'light-dark(#1769aa, #75bfff)',
+		'light-dark(#087f5b, #63d6ad)',
+		'light-dark(#9a5a00, #f0b35f)',
+		'light-dark(#a33a55, #f18aa2)',
+		'light-dark(#7048a8, #bd9aee)',
+		'light-dark(#087b83, #65d2da)'
+	];
 
+	type LOD = 'L' | 'M' | 'S';
+	type AuthorPromotion = 'M' | 'L';
+	const LOD_RANK: Record<LOD, number> = { S: 0, M: 1, L: 2 };
 	type PromotedRole = 'thread' | 'primary' | 'alternate';
 	type RenderHNItem = Omit<HNItem, 'comments'> & {
 		comments: RenderHNItem[];
@@ -125,7 +136,9 @@
 	}
 
 	function isGenericArchiveOrg(candidate: PromotedLinkCandidate): boolean {
-		return candidate.type === 'archive' && candidate.host === 'archive.org' && candidate.serviceRank >= 6;
+		return (
+			candidate.type === 'archive' && candidate.host === 'archive.org' && candidate.serviceRank >= 6
+		);
 	}
 
 	function archiveTargetHost(url: string): string {
@@ -181,7 +194,8 @@
 
 			if (isArchive) {
 				type = 'archive';
-				confidence = targetHost && storyHost && sameHostOrSubdomain(targetHost, storyHost) ? 'high' : 'medium';
+				confidence =
+					targetHost && storyHost && sameHostOrSubdomain(targetHost, storyHost) ? 'high' : 'medium';
 			} else if (isXMirror) {
 				type = 'mirror';
 				confidence = storyIsTwitter ? 'high' : 'low';
@@ -218,25 +232,27 @@
 
 		walk(root.comments);
 		const archiveOrGift = candidates.filter((candidate) => candidate.type !== 'mirror');
-		const preferredArchiveOrGift = archiveOrGift.filter((candidate) => !isGenericArchiveOrg(candidate));
+		const preferredArchiveOrGift = archiveOrGift.filter(
+			(candidate) => !isGenericArchiveOrg(candidate)
+		);
 		const xMirrorHigh = candidates.filter(
 			(candidate) => candidate.type === 'mirror' && candidate.confidence === 'high'
 		);
-		const primaryCandidates = preferredArchiveOrGift.length > 0 ? preferredArchiveOrGift : archiveOrGift;
+		const primaryCandidates =
+			preferredArchiveOrGift.length > 0 ? preferredArchiveOrGift : archiveOrGift;
 		const filtered =
 			primaryCandidates.length > 0
 				? [...primaryCandidates, ...xMirrorHigh]
 				: candidates.filter((candidate) => candidate.type === 'mirror');
 		const rank = { high: 0, medium: 1, low: 2 } satisfies Record<PromotedConfidence, number>;
-		const typeRank = { archive: 0, gift: 1, mirror: 2 } satisfies Record<PromotedCandidateType, number>;
+		const typeRank = { archive: 0, gift: 1, mirror: 2 } satisfies Record<
+			PromotedCandidateType,
+			number
+		>;
 		const score = (candidate: PromotedLinkCandidate) =>
 			candidate.serviceRank * 10 + typeRank[candidate.type] * 3 + rank[candidate.confidence];
 
-		return filtered.sort(
-			(a, b) =>
-				score(a) - score(b) ||
-				a.source.time - b.source.time
-		);
+		return filtered.sort((a, b) => score(a) - score(b) || a.source.time - b.source.time);
 	}
 
 	function addPromotedLinksThread(root: HNItem): RenderHNItem {
@@ -328,17 +344,29 @@
 	const domain = $derived(displayItem ? displayItem.domain || domainify(displayItem.url) : '');
 
 	// Used for view history; displayed count stays on API metadata to avoid hydration churn.
-	const visibleCommentCount = $derived(displayItem ? countVisibleComments(displayItem.comments) : 0);
+	const visibleCommentCount = $derived(
+		displayItem ? countVisibleComments(displayItem.comments) : 0
+	);
 	const displayedCommentCount = $derived(displayItem?.comments_count ?? 0);
 
 	// --- LOD (Level of Detail) state ---
 	// Single source of truth for per-comment render state. Missing key ⇒ default 'L'.
 	// Post id may be written freely; the renderer never reads the post's entry.
 	// SvelteMap so per-id mutations (setLOD in Phase 3) trigger fine-grained rerenders.
-	const lodState = new SvelteMap<number, 'L' | 'M' | 'S'>();
+	const lodState = new SvelteMap<number, LOD>();
+	const authorPromotions = new SvelteMap<string, AuthorPromotion>();
+	let newCommentThreshold = $state<number | null>(null);
 
-	function getLOD(id: number): 'L' | 'M' | 'S' {
+	function getBaseLOD(id: number): LOD {
 		return lodState.get(id) ?? 'L';
+	}
+
+	function moreDetailedLOD(a: LOD, b: LOD): LOD {
+		return LOD_RANK[a] >= LOD_RANK[b] ? a : b;
+	}
+
+	function isNewComment(comment: RenderHNItem): boolean {
+		return newCommentThreshold !== null && comment.time > newCommentThreshold;
 	}
 
 	// Tree index: derived from item.comments + item.id. Rebuilt when the item changes.
@@ -349,6 +377,7 @@
 		childrenOf: SvelteMap<number, number[]>; // comment/post id → visible child ids in tree order
 		levelOf: SvelteMap<number, number>; // post → 0, top-level → 1, etc.
 		promotedRoleOf: SvelteMap<number, PromotedRole>;
+		commentById: SvelteMap<number, RenderHNItem>;
 		allIds: number[]; // every visible comment id in depth-first pre-order (excludes post)
 	}
 
@@ -357,6 +386,7 @@
 		const childrenOf = new SvelteMap<number, number[]>();
 		const levelOf = new SvelteMap<number, number>(displayTree ? [[displayTree.id, 0]] : []);
 		const promotedRoleOf = new SvelteMap<number, PromotedRole>();
+		const commentById = new SvelteMap<number, RenderHNItem>();
 		const allIds: number[] = [];
 
 		function walk(comments: RenderHNItem[], parentId: number, level: number) {
@@ -366,6 +396,7 @@
 				visible.map((c) => c.id)
 			);
 			for (const c of visible) {
+				commentById.set(c.id, c);
 				parentOf.set(c.id, parentId);
 				levelOf.set(c.id, level);
 				if (c.promotedRole) promotedRoleOf.set(c.id, c.promotedRole);
@@ -375,23 +406,36 @@
 		}
 		if (displayTree) walk(displayTree.comments, displayTree.id, 1);
 
-		return { parentOf, childrenOf, levelOf, promotedRoleOf, allIds };
+		return { parentOf, childrenOf, levelOf, promotedRoleOf, commentById, allIds };
 	});
+
+	function getEffectiveLOD(comment: RenderHNItem): LOD {
+		let lod = getBaseLOD(comment.id);
+		const authorMinimum = comment.user ? authorPromotions.get(comment.user) : undefined;
+		if (authorMinimum) lod = moreDetailedLOD(lod, authorMinimum);
+		if (isNewComment(comment)) lod = moreDetailedLOD(lod, 'M');
+		return lod;
+	}
+
+	function getEffectiveLODById(id: number): LOD {
+		const comment = treeIndex.commentById.get(id);
+		return comment ? getEffectiveLOD(comment) : getBaseLOD(id);
+	}
 
 	// --- LOD primitives ---
 	// setLOD writes uniformly for all ids (no default-cleanup, no special cases).
 	// Post id may be written freely; the renderer never reads the post's entry.
-	function setLOD(ids: Iterable<number>, lod: 'L' | 'M' | 'S'): void {
+	function setLOD(ids: Iterable<number>, lod: LOD): void {
 		for (const id of ids) lodState.set(id, lod);
 	}
 
 	// toggleLOD: with override, sets directly. Without, cycles L → M → S → L.
-	function toggleLOD(id: number, override?: 'L' | 'M' | 'S'): void {
+	function toggleLOD(id: number, override?: LOD): void {
 		if (override) {
 			lodState.set(id, override);
 			return;
 		}
-		const current = getLOD(id);
+		const current = getBaseLOD(id);
 		const next = current === 'L' ? 'M' : current === 'M' ? 'S' : 'L';
 		lodState.set(id, next);
 	}
@@ -666,6 +710,33 @@
 		setHighlight(segmentIds);
 	}
 
+	function authorColor(username: string): string {
+		let hash = 2166136261;
+		for (let i = 0; i < username.length; i += 1) {
+			hash ^= username.charCodeAt(i);
+			hash = Math.imul(hash, 16777619);
+		}
+		return AUTHOR_COLORS[(hash >>> 0) % AUTHOR_COLORS.length];
+	}
+
+	function toggleAuthorPromotion(username: string, level: AuthorPromotion): void {
+		if (authorPromotions.get(username) === level) authorPromotions.delete(username);
+		else authorPromotions.set(username, level);
+	}
+
+	async function onAuthorPromotionClick(
+		e: MouseEvent,
+		username: string,
+		level: AuthorPromotion
+	): Promise<void> {
+		e.stopPropagation();
+		const anchor = (e.currentTarget as HTMLElement).closest('d-comment') as HTMLElement | null;
+		const rectBefore = anchor?.getBoundingClientRect();
+		const snap = snapshotLayout();
+		toggleAuthorPromotion(username, level);
+		await animateLayoutChange(snap, anchor, rectBefore);
+	}
+
 	// --- Target selectors (pure) ---
 	// All selectors return number[] and read from treeIndex. Callers wrap in
 	// `new Set(...)` when set operations are needed. Post id is never included
@@ -729,7 +800,7 @@
 	// rather than renderList so it works regardless of grouping/rendering.
 	function allStripMembers(): number[] {
 		const result: number[] = [];
-		for (const id of treeIndex.allIds) if (getLOD(id) === 'S') result.push(id);
+		for (const id of treeIndex.allIds) if (getEffectiveLODById(id) === 'S') result.push(id);
 		return result;
 	}
 
@@ -780,6 +851,7 @@
 		if (id === lodItemId) return;
 
 		lodState.clear();
+		authorPromotions.clear();
 		highlightedIds.clear();
 		ungroupAllFlag = false;
 		lodItemId = id;
@@ -803,12 +875,12 @@
 	const allLActive = $derived.by(() => {
 		const ids = treeIndex.allIds;
 		if (ids.length === 0) return false;
-		for (const id of ids) if (getLOD(id) !== 'L') return false;
+		for (const id of ids) if (getEffectiveLODById(id) !== 'L') return false;
 		return true;
 	});
 	const ungroupAllActive = $derived.by(() => {
 		if (!ungroupAllFlag) return false;
-		for (const id of treeIndex.allIds) if (getLOD(id) === 'S') return false;
+		for (const id of treeIndex.allIds) if (getEffectiveLODById(id) === 'S') return false;
 		return true;
 	});
 
@@ -837,31 +909,31 @@
 
 	// --- Phase 5.2: per-L row action predicates + handlers ---
 	// These are plain functions (not $derived) called from the commentRow
-	// snippet. SvelteMap reads via getLOD() make them reactive on render.
+	// snippet. Effective LOD reads make them reactive on render.
 	// Returns false for empty scopes so "active" doesn't misreport on leaves.
 	function repliesAllL(id: number): boolean {
 		const kids = directChildrenOf(id);
 		if (kids.length === 0) return false;
-		for (const k of kids) if (getLOD(k) !== 'L') return false;
+		for (const k of kids) if (getEffectiveLODById(k) !== 'L') return false;
 		return true;
 	}
 	function subtreeAllL(id: number): boolean {
 		const desc = descendantsOf(id);
 		if (desc.length === 0) return false;
-		for (const d of desc) if (getLOD(d) !== 'L') return false;
+		for (const d of desc) if (getEffectiveLODById(d) !== 'L') return false;
 		return true;
 	}
 	function subtreeNoS(id: number): boolean {
 		const desc = descendantsOf(id);
 		if (desc.length === 0) return false;
-		for (const d of desc) if (getLOD(d) === 'S') return false;
+		for (const d of desc) if (getEffectiveLODById(d) === 'S') return false;
 		return true;
 	}
 	// B1 — Expand direct replies. Toggle L↔M on immediate children only.
 	function onExpandReplies(id: number): void {
 		const kids = directChildrenOf(id);
 		if (kids.length === 0) return;
-		const anyM = kids.some((k) => getLOD(k) === 'M');
+		const anyM = kids.some((k) => getEffectiveLODById(k) === 'M');
 		setLOD(kids, anyM ? 'L' : 'M');
 	}
 
@@ -873,7 +945,7 @@
 	function onExpandSubtree(id: number): void {
 		const desc = descendantsOf(id);
 		if (desc.length === 0) return;
-		const anyNonL = desc.some((d) => getLOD(d) !== 'L');
+		const anyNonL = desc.some((d) => getEffectiveLODById(d) !== 'L');
 		if (anyNonL) setLOD(desc, 'L');
 		else applyDefaultPolicy(false, desc);
 	}
@@ -886,10 +958,10 @@
 	function onUngroupSubtree(id: number): void {
 		const desc = descendantsOf(id);
 		if (desc.length === 0) return;
-		const anyS = desc.some((d) => getLOD(d) === 'S');
+		const anyS = desc.some((d) => getEffectiveLODById(d) === 'S');
 		if (anyS) {
 			// Promote only the S descendants to M; leave existing L/M alone.
-			const toPromote = desc.filter((d) => getLOD(d) === 'S');
+			const toPromote = desc.filter((d) => getEffectiveLODById(d) === 'S');
 			setLOD(toPromote, 'M');
 		} else {
 			// Re-run default policy within the subtree (ungroup=false → strips
@@ -1001,7 +1073,7 @@
 			run = [];
 		};
 		for (const row of rows) {
-			if (row.placeholder || getLOD(row.id) === 'S') {
+			if (row.placeholder || getEffectiveLOD(row.comment) === 'S') {
 				run.push(row);
 			} else {
 				flushRun();
@@ -1014,7 +1086,6 @@
 
 	// New-comment tracking: threshold is the viewedAt from the previous visit.
 	// null = first visit (no highlights). Set on mount from IndexedDB.
-	let newCommentThreshold = $state<number | null>(null);
 	let newCommentCount = $state(0);
 	type LodDevToolsWindow = Window & {
 		__lod?: {
@@ -1103,7 +1174,9 @@
 	}
 
 	function mergeHydratedItems(root: HNItem, hydratedItems: HNItem[]): HNItem {
-		const byId = new SvelteMap(hydratedItems.map((hydratedItem) => [hydratedItem.id, hydratedItem]));
+		const byId = new SvelteMap(
+			hydratedItems.map((hydratedItem) => [hydratedItem.id, hydratedItem])
+		);
 
 		function mergeNode(node: HNItem): HNItem {
 			const hydrated = byId.get(node.id);
@@ -1139,10 +1212,15 @@
 
 		for (const topLevelComment of displayItem.comments) {
 			while (run === hydrateRun && displayItem?.id === itemId) {
-				const currentTopLevelComment = displayItem ? findComment(displayItem, topLevelComment.id) : null;
+				const currentTopLevelComment = displayItem
+					? findComment(displayItem, topLevelComment.id)
+					: null;
 				if (!currentTopLevelComment) break;
 
-				const ids = collectUnloadedParents(currentTopLevelComment, seen).slice(0, HYDRATE_BATCH_SIZE);
+				const ids = collectUnloadedParents(currentTopLevelComment, seen).slice(
+					0,
+					HYDRATE_BATCH_SIZE
+				);
 				if (ids.length === 0) break;
 				for (const id of ids) seen.add(id);
 
@@ -1200,9 +1278,7 @@
 				firebaseLoaded = true;
 				markFirebaseLoaded(loadedItem);
 				item =
-					displayItem?.id === loadedItem.id
-						? mergeAdditive(loadedItem, displayItem)
-						: loadedItem;
+					displayItem?.id === loadedItem.id ? mergeAdditive(loadedItem, displayItem) : loadedItem;
 				void hydrateItem(id);
 			})
 			.catch(() => {
@@ -1239,7 +1315,9 @@
 	});
 
 	const hnItemUrl = $derived(
-		displayItem ? `https://news.ycombinator.com/item?id=${displayItem.id}` : 'https://news.ycombinator.com/'
+		displayItem
+			? `https://news.ycombinator.com/item?id=${displayItem.id}`
+			: 'https://news.ycombinator.com/'
 	);
 	const hnUserUrl = $derived(
 		displayItem?.user ? `https://news.ycombinator.com/user?id=${displayItem.user}` : null
@@ -1328,14 +1406,15 @@
 {/snippet}
 
 {#snippet commentRow(comment: RenderHNItem, level: number)}
-	{@const lod = getLOD(comment.id)}
+	{@const lod = getEffectiveLOD(comment)}
 	{@const isDead = comment.content === '<p>[dead]'}
 	{@const isPromotedThread = comment.promotedRole === 'thread'}
 	{@const isSynthetic = !!comment.promotedRole}
 	{@const hnCommentId = comment.originalId ?? comment.id}
 	{@const isDeleted = !comment.user && !isPromotedThread}
 	{@const isOp = !isDead && !!comment.user && comment.user === displayItem?.user}
-	{@const isNew = newCommentThreshold !== null && comment.time > newCommentThreshold}
+	{@const isNew = isNewComment(comment)}
+	{@const authorPromotion = comment.user ? authorPromotions.get(comment.user) : undefined}
 	{@const indent = Math.min(level - 1, MAX_INDENT)}
 	{@const colorIndex = (level - 1) % LEVEL_COLORS.length}
 	{@const barWidth = level === 1 ? 0 : Math.min(1 + level, 14)}
@@ -1356,8 +1435,14 @@
 		style:--indent={indent}
 		style:--level-color={LEVEL_COLORS[colorIndex]}
 		style:--bar-width="{barWidth}px"
+		style:--author-promotion-color={isOp
+			? '#ff6600'
+			: comment.user
+				? authorColor(comment.user)
+				: undefined}
 		class:top-level={level === 1}
 		class:op={isOp}
+		class:author-promoted={!!authorPromotion}
 		class:deleted={isDeleted && !isDead}
 		class:dead={isDead}
 		class:promoted-thread={isPromotedThread}
@@ -1441,6 +1526,37 @@
 					</a>
 				{/if}
 				{#if lod === 'L'}
+					{#if !isSynthetic && !isDead && !isDeleted && comment.user}
+						<s-author-actions>
+							<button
+								type="button"
+								class="author-promotion-btn"
+								class:active={authorPromotion === 'M'}
+								aria-pressed={authorPromotion === 'M'}
+								aria-label="Pin comments by {comment.user}"
+								title="Highlight {comment.user} and keep their comments visible"
+								onclick={(e) => onAuthorPromotionClick(e, comment.user!, 'M')}
+							>
+								<svg viewBox="0 0 24 24" aria-hidden="true">
+									<path d="M8 3h8l-1 6 3 3v2h-5v7l-1 1-1-1v-7H6v-2l3-3z" />
+								</svg>
+							</button>
+							<button
+								type="button"
+								class="author-promotion-btn"
+								class:active={authorPromotion === 'L'}
+								aria-pressed={authorPromotion === 'L'}
+								aria-label="Pin and fully expand comments by {comment.user}"
+								title="Highlight {comment.user} and fully expand their comments"
+								onclick={(e) => onAuthorPromotionClick(e, comment.user!, 'L')}
+							>
+								<svg viewBox="0 0 24 24" aria-hidden="true">
+									<path d="M7 4h7l-1 5 3 3v2h-4v7l-1 1-1-1v-7H5v-2l3-3z" />
+									<path class="plus" d="M18 3v6M15 6h6" />
+								</svg>
+							</button>
+						</s-author-actions>
+					{/if}
 					{@const hasKids = directChildrenOf(comment.id).length > 0}
 					{@const hasDesc = descendantsOf(comment.id).length > 0}
 					{@const b1Active = hasKids && repliesAllL(comment.id)}
@@ -1645,124 +1761,124 @@
 		<d-empty>Loading item...</d-empty>
 	{:else}
 		{@const item = displayItem}
-	<d-header>
-		<d-nav>
-			<button type="button" class="back-btn" onclick={goBack}> ← Back </button>
-			<d-lod-toolbar>
-				<button
-					type="button"
-					class="lod-toolbar-btn"
-					class:active={ungroupAllActive}
-					aria-pressed={ungroupAllActive}
-					disabled={allLActive}
-					title="Show every comment (no grouped strips)"
-					onclick={async (e) => {
-						const anchor = e.currentTarget as HTMLElement;
-						const rectBefore = anchor.getBoundingClientRect();
-						const snap = snapshotLayout();
-						onUngroupAll();
-						await animateLayoutChange(snap, anchor, rectBefore);
-					}}
-				>
-					Ungroup all
-				</button>
-				<button
-					type="button"
-					class="lod-toolbar-btn"
-					class:active={allLActive}
-					aria-pressed={allLActive}
-					title="Expand all comments to full detail"
-					onclick={async (e) => {
-						const anchor = e.currentTarget as HTMLElement;
-						const rectBefore = anchor.getBoundingClientRect();
-						const snap = snapshotLayout();
-						onExpandAll();
-						await animateLayoutChange(snap, anchor, rectBefore);
-					}}
-				>
-					Expand all
-				</button>
-			</d-lod-toolbar>
-		</d-nav>
+		<d-header>
+			<d-nav>
+				<button type="button" class="back-btn" onclick={goBack}> ← Back </button>
+				<d-lod-toolbar>
+					<button
+						type="button"
+						class="lod-toolbar-btn"
+						class:active={ungroupAllActive}
+						aria-pressed={ungroupAllActive}
+						disabled={allLActive}
+						title="Show every comment (no grouped strips)"
+						onclick={async (e) => {
+							const anchor = e.currentTarget as HTMLElement;
+							const rectBefore = anchor.getBoundingClientRect();
+							const snap = snapshotLayout();
+							onUngroupAll();
+							await animateLayoutChange(snap, anchor, rectBefore);
+						}}
+					>
+						Ungroup all
+					</button>
+					<button
+						type="button"
+						class="lod-toolbar-btn"
+						class:active={allLActive}
+						aria-pressed={allLActive}
+						title="Expand all comments to full detail"
+						onclick={async (e) => {
+							const anchor = e.currentTarget as HTMLElement;
+							const rectBefore = anchor.getBoundingClientRect();
+							const snap = snapshotLayout();
+							onExpandAll();
+							await animateLayoutChange(snap, anchor, rectBefore);
+						}}
+					>
+						Expand all
+					</button>
+				</d-lod-toolbar>
+			</d-nav>
 
-		<d-item-header>
-			{#if item.title}
-				<d-title>
-					<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- external article/HN URL -->
-					<a href={articleUrl} class="title-link">{item.title}</a>
-				</d-title>
-				{#if domain}
-					<d-url-row>
+			<d-item-header>
+				{#if item.title}
+					<d-title>
 						<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- external article/HN URL -->
-						<a href={articleUrl} class="url-link">
-							{domain}<s-path>{urlPath}</s-path>
-						</a>
-					</d-url-row>
+						<a href={articleUrl} class="title-link">{item.title}</a>
+					</d-title>
+					{#if domain}
+						<d-url-row>
+							<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- external article/HN URL -->
+							<a href={articleUrl} class="url-link">
+								{domain}<s-path>{urlPath}</s-path>
+							</a>
+						</d-url-row>
+					{/if}
 				{/if}
-			{/if}
 
-			<d-metadata>
-				<s-comments
-					class:high={displayedCommentCount >= 100}
-					class:mid={displayedCommentCount >= 50 && displayedCommentCount < 100}
-				>
-					<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- external HN URL -->
-					<a href={hnItemUrl} class="meta-link">
-						{displayedCommentCount}
-						{@render message()}
-					</a>
-				</s-comments>
-				{#if newCommentCount > 0}
-					<s-new-count>{newCommentCount} new</s-new-count>
-				{/if}
-				<s-points
-					class:high={(item.points ?? 0) >= 100}
-					class:mid={(item.points ?? 0) >= 50 && (item.points ?? 0) < 100}
-				>
-					{item.points ?? 0}
-					{@render upvote()}
-				</s-points>
-				<s-time>{relativeTime(item.time)}</s-time>
-				{#if item.user}
-					<s-user>
+				<d-metadata>
+					<s-comments
+						class:high={displayedCommentCount >= 100}
+						class:mid={displayedCommentCount >= 50 && displayedCommentCount < 100}
+					>
 						<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- external HN URL -->
-						by <a href={hnUserUrl} class="meta-link">{item.user}</a>
-					</s-user>
+						<a href={hnItemUrl} class="meta-link">
+							{displayedCommentCount}
+							{@render message()}
+						</a>
+					</s-comments>
+					{#if newCommentCount > 0}
+						<s-new-count>{newCommentCount} new</s-new-count>
+					{/if}
+					<s-points
+						class:high={(item.points ?? 0) >= 100}
+						class:mid={(item.points ?? 0) >= 50 && (item.points ?? 0) < 100}
+					>
+						{item.points ?? 0}
+						{@render upvote()}
+					</s-points>
+					<s-time>{relativeTime(item.time)}</s-time>
+					{#if item.user}
+						<s-user>
+							<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- external HN URL -->
+							by <a href={hnUserUrl} class="meta-link">{item.user}</a>
+						</s-user>
+					{/if}
+					<s-hn-link>
+						<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- external HN URL -->
+						<a href={hnItemUrl} class="hn-link">news.ycombinator.com/item?id={item.id}</a>
+					</s-hn-link>
+				</d-metadata>
+
+				{#if parentStoryId}
+					<d-parent>
+						<a href={resolve(`/i/${parentStoryId}`)} class="meta-link">← parent story</a>
+					</d-parent>
 				{/if}
-				<s-hn-link>
-					<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- external HN URL -->
-					<a href={hnItemUrl} class="hn-link">news.ycombinator.com/item?id={item.id}</a>
-				</s-hn-link>
-			</d-metadata>
+			</d-item-header>
 
-			{#if parentStoryId}
-				<d-parent>
-					<a href={resolve(`/i/${parentStoryId}`)} class="meta-link">← parent story</a>
-				</d-parent>
+			{#if item.content}
+				<d-item-body>
+					<!-- eslint-disable-next-line svelte/no-at-html-tags -- HN API returns intentional item HTML -->
+					{@html item.content}
+				</d-item-body>
 			{/if}
-		</d-item-header>
-
-		{#if item.content}
-			<d-item-body>
-				<!-- eslint-disable-next-line svelte/no-at-html-tags -- HN API returns intentional item HTML -->
-				{@html item.content}
-			</d-item-body>
-		{/if}
-	</d-header>
+		</d-header>
 
 		{#if displayTree && displayTree.comments.length > 0}
-		<d-comments>
-			{#each renderList as renderItem (renderItem.kind === 'row' ? `r-${renderItem.id}` : `s-${renderItem.segments[0].id}`)}
-				{#if renderItem.kind === 'row'}
-					{@render commentRow(renderItem.comment, renderItem.level)}
-				{:else}
-					{@render stripRow(renderItem)}
-				{/if}
-			{/each}
-		</d-comments>
-	{:else}
-		<d-empty>No comments.</d-empty>
-	{/if}
+			<d-comments>
+				{#each renderList as renderItem (renderItem.kind === 'row' ? `r-${renderItem.id}` : `s-${renderItem.segments[0].id}`)}
+					{#if renderItem.kind === 'row'}
+						{@render commentRow(renderItem.comment, renderItem.level)}
+					{:else}
+						{@render stripRow(renderItem)}
+					{/if}
+				{/each}
+			</d-comments>
+		{:else}
+			<d-empty>No comments.</d-empty>
+		{/if}
 	{/if}
 </main>
 
@@ -1851,6 +1967,53 @@
 		flex-wrap: wrap;
 		gap: var(--size-1);
 		margin-inline-start: auto;
+	}
+
+	s-author-actions {
+		display: inline-flex;
+		align-items: center;
+		gap: 1px;
+	}
+
+	.author-promotion-btn {
+		display: inline-grid;
+		place-items: center;
+		box-sizing: border-box;
+		width: 18px;
+		height: 18px;
+		padding: 2px;
+		color: light-dark(#666, #999);
+		background: light-dark(#f5f5f5, #2a2a2a);
+		border: 1px solid light-dark(#ddd, #3a3a3a);
+		border-radius: 3px;
+		cursor: pointer;
+
+		&:hover {
+			color: light-dark(#333, #ddd);
+			background: light-dark(#e8e8e8, #333);
+			border-color: light-dark(#bbb, #555);
+		}
+
+		&.active {
+			color: var(--author-promotion-color);
+			background: light-dark(#e5e5e5, #383838);
+			border-color: currentColor;
+			box-shadow: inset 0 1px 3px light-dark(rgb(0 0 0 / 0.15), rgb(0 0 0 / 0.35));
+		}
+
+		svg {
+			display: block;
+			width: 12px;
+			height: 12px;
+			fill: currentColor;
+		}
+
+		.plus {
+			fill: none;
+			stroke: currentColor;
+			stroke-width: 2.25;
+			stroke-linecap: round;
+		}
 	}
 
 	.lod-row-btn {
@@ -2201,6 +2364,15 @@
 
 		&.op d-comment-meta s-author {
 			color: #ff6600;
+			font-weight: var(--font-weight-6);
+		}
+
+		&.author-promoted d-comment-meta s-author {
+			display: inline-block;
+			padding: 0 0.35em;
+			color: light-dark(#fff, #161616);
+			background: var(--author-promotion-color);
+			border-radius: 3px;
 			font-weight: var(--font-weight-6);
 		}
 

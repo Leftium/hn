@@ -1,7 +1,7 @@
 # Spec: Comment Author Highlighting and Promotion
 
 **Date:** 2026-07-21
-**Status:** Draft
+**Status:** Implemented; core interaction manually verified, lifecycle and automated checks pending
 **Companion to:** `specs/comment-lod.md`
 
 ## One Sentence
@@ -63,7 +63,7 @@ alice  OP  NEW  2h  [pin] [pin+]  |  [Expand replies] [Ungroup] [Expand]
                     author icons    subtree actions
 ```
 
-The groups use spacing or a subtle divider to distinguish author actions from subtree actions. M rows retain their current compact layout and do not render author controls.
+Spacing distinguishes author actions from subtree actions. M rows retain their current compact layout and do not render author controls.
 
 The username remains an ordinary HN profile link. Clicking it never changes promotion state.
 
@@ -96,7 +96,7 @@ This avoids a multi-click cycle. Promoting an author can change the height of co
 
 The buttons have no visible text labels. Both use the same inline SVG pin shape; Pin+ overlays a small plus in the pin's upper-right corner. The SVGs share one view box, and both buttons keep identical fixed outer dimensions so state changes never shift the metadata layout. Use SVG rather than an emoji so the shape is consistent across platforms.
 
-The plus must remain legible at the narrowest supported layout. The visible icon may be compact, but the button should preserve the app's normal touch-target size on mobile. Active state uses the button background and border treatment already established for LOD actions; it must not depend only on outline versus filled pin artwork.
+The plus must remain legible at the narrowest supported layout. The buttons are intentionally compact and approximately the same height as the existing inline LOD actions. Active state uses the button background and border treatment already established for LOD actions; it must not depend only on outline versus filled pin artwork.
 
 Accessible names include the author and scope:
 
@@ -112,9 +112,9 @@ Titles describe the resulting behavior:
 
 Pin and Pin+ use the same author highlight. Promotion level changes detail, not color.
 
-- A promoted author's name uses a color from a fixed accessible palette and the same emphasized weight as the existing OP treatment.
+- A promoted author's name renders as a compact solid-color pill using a color from a fixed accessible palette, high-contrast negative-space text, and the same emphasized weight as the existing OP treatment.
 - Color is derived deterministically from the username within the app, so every comment by one author uses the same color without stored preferences.
-- OP keeps the existing fixed orange treatment. Promoting the OP changes minimum LOD but does not replace orange.
+- OP keeps the existing fixed orange treatment. Promoting the OP adds the same pill shape with an orange background and does not replace orange with a palette color.
 - Author highlighting does not add another row background. This preserves the existing NEW and just-clicked background layers.
 - Palette collisions between different usernames are acceptable; color is a scanning aid, not a unique identifier.
 
@@ -222,26 +222,26 @@ Synthetic promoted-link rows and deleted comments do not expose author actions. 
 
 ### Phase 1: Separate base and effective LOD
 
-- [ ] Introduce shared `LOD` and `AuthorPromotion` types.
-- [ ] Make the existing `lodState` read explicit as base LOD.
-- [ ] Add a comment lookup to the tree index if effective-LOD consumers need one.
-- [ ] Add `getEffectiveLOD()` with author and NEW minima.
-- [ ] Move rendering and S-strip grouping to effective LOD without changing render order.
-- [ ] Update existing active-state derivations and row toggles according to the rules above.
+- [x] Introduce shared `LOD` and `AuthorPromotion` types.
+- [x] Make the existing `lodState` read explicit as base LOD.
+- [x] Add a comment lookup to the tree index if effective-LOD consumers need one.
+- [x] Add `getEffectiveLOD()` with author and NEW minima.
+- [x] Move rendering and S-strip grouping to effective LOD without changing render order.
+- [x] Update existing active-state derivations and row toggles according to the rules above.
 
 ### Phase 2: Author state and controls
 
-- [ ] Add thread-local `authorPromotions` state and clear it on item navigation.
-- [ ] Add direct M/L/off action handlers using the transition table in this spec.
-- [ ] Render fixed-size inline SVG pin and pin-plus buttons after the timestamp on L rows only.
-- [ ] Visually separate author actions from subtree actions.
-- [ ] Add pressed state, accessible names, titles, keyboard behavior, touch targets, and propagation handling consistent with existing buttons.
-- [ ] Route author actions through the existing layout animation path with the clicked row as anchor.
+- [x] Add thread-local `authorPromotions` state and clear it on item navigation.
+- [x] Add direct M/L/off action handlers using the transition table in this spec.
+- [x] Render fixed-size inline SVG pin and pin-plus buttons after the timestamp on L rows only.
+- [x] Separate author actions from subtree actions with spacing.
+- [x] Add pressed state, accessible names, titles, keyboard behavior, compact sizing, and propagation handling consistent with existing buttons.
+- [x] Route author actions through the existing layout animation path with the clicked row as anchor.
 
 ### Phase 3: Highlight styling and verification
 
-- [ ] Add the deterministic author-color palette and promoted-author styling.
-- [ ] Preserve fixed orange OP styling and existing NEW/just-clicked layers.
+- [x] Add the deterministic author-color palette and promoted-author pill styling.
+- [x] Preserve fixed orange OP styling and existing NEW/just-clicked layers.
 - [ ] Verify promotion across initial data, hydration, and later comment arrival.
 - [ ] Verify narrow layouts with both author and subtree controls present.
 
@@ -269,7 +269,7 @@ Synthetic promoted-link rows and deleted comments do not expose author actions. 
 - [ ] Existing row, subtree, Ungroup all, and Expand all actions remain usable without clearing promotion policies.
 - [ ] New or hydrated comments inherit author and NEW promotion without resetting current thread state.
 - [ ] OP, NEW, and just-clicked visual treatments remain distinguishable.
-- [ ] The controls remain usable on narrow touch layouts, the plus remains legible, and both buttons have author-specific accessible names.
+- [ ] The compact controls remain usable on narrow layouts, the plus remains legible, and both buttons have author-specific accessible names.
 
 ## References
 
