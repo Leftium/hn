@@ -139,7 +139,8 @@
 
 		const passesKarma = minKarma !== null && user.karma >= minKarma;
 		const passesAge =
-			minAgeYears !== null && dayjs.unix(user.created).isBefore(dayjs().subtract(minAgeYears, 'year'));
+			minAgeYears !== null &&
+			dayjs.unix(user.created).isBefore(dayjs().subtract(minAgeYears, 'year'));
 
 		return passesKarma || passesAge;
 	}
@@ -371,7 +372,10 @@
 	{#if data.previousDate || data.nextRange}
 		<d-item class="more-link">
 			{#if data.previousDate}
-				<a href={resolve(withThresholdParams(`/${data.source}/${data.previousDate}`))} rel="nofollow">
+				<a
+					href={resolve(withThresholdParams(`/${data.source}/${data.previousDate}`))}
+					rel="nofollow"
+				>
 					<d-metadata>
 						<s-url>More... {data.previousDate}</s-url>
 					</d-metadata>

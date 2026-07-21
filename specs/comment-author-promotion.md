@@ -82,10 +82,10 @@ A missing entry means that the author is not promoted.
 The two buttons are direct, mutually exclusive choices:
 
 | Current state | Press Pin | Press Pin+ |
-| --- | --- | --- |
-| Off | M | L |
-| M | Off | L |
-| L | M | Off |
+| ------------- | --------- | ---------- |
+| Off           | M         | L          |
+| M             | Off       | L          |
+| L             | M         | Off        |
 
 - **Pin** is active only when the author's state is M.
 - **Pin+** is active only when the author's state is L.
@@ -150,12 +150,12 @@ effective LOD = max(
 Examples:
 
 | Base | Author | NEW | Effective |
-| --- | --- | --- | --- |
-| S | Off | No | S |
-| S | M | No | M |
-| S | Off | Yes | M |
-| M | L | No | L |
-| L | M | Yes | L |
+| ---- | ------ | --- | --------- |
+| S    | Off    | No  | S         |
+| S    | M      | No  | M         |
+| S    | Off    | Yes | M         |
+| M    | L      | No  | L         |
+| L    | M      | Yes | L         |
 
 Promotion must not copy effective values into `lodState`. Removing an author promotion or changing the NEW threshold reveals the current base policy rather than restoring a snapshot.
 

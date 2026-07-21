@@ -140,10 +140,13 @@
 
 		<hr />
 
-		<h2>User thresholds <span class="subheader">(visually de-emphasize lower-trust posts)</span></h2>
+		<h2>
+			User thresholds <span class="subheader">(visually de-emphasize lower-trust posts)</span>
+		</h2>
 
 		<p class="explanation">
-			Stories stay visible, but are faded after load unless the submitter meets either enabled threshold.
+			Stories stay visible, but are faded after load unless the submitter meets either enabled
+			threshold.
 		</p>
 
 		<div class="threshold-grid">

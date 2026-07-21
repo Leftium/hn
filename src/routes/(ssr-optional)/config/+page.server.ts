@@ -6,7 +6,9 @@ const COOKIE_OPTIONS = {
 	maxAge: 60 * 60 * 24 * 365
 };
 
-function parseOptionalPositiveInt(value: FormDataEntryValue | string | null | undefined): string | null {
+function parseOptionalPositiveInt(
+	value: FormDataEntryValue | string | null | undefined
+): string | null {
 	if (!value) return null;
 	const parsed = parseInt(value.toString(), 10);
 	return Number.isFinite(parsed) && parsed > 0 ? parsed.toString() : null;
