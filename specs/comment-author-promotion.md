@@ -143,19 +143,23 @@ Effective LOD is the most detailed applicable value:
 effective LOD = max(
   base LOD,
   promoted-author minimum,
-  NEW-comment minimum
+  NEW-comment minimum,
+  promoted-reply parent-context minimum
 )
 ```
 
+The parent-context minimum is M and applies to the direct parent of every real comment by a promoted author.
+
 Examples:
 
-| Base | Author | NEW | Effective |
-| ---- | ------ | --- | --------- |
-| S    | Off    | No  | S         |
-| S    | M      | No  | M         |
-| S    | Off    | Yes | M         |
-| M    | L      | No  | L         |
-| L    | M      | Yes | L         |
+| Base | Author | NEW | Parent context | Effective |
+| ---- | ------ | --- | -------------- | --------- |
+| S    | Off    | No  | No             | S         |
+| S    | M      | No  | No             | M         |
+| S    | Off    | Yes | No             | M         |
+| M    | L      | No  | No             | L         |
+| L    | M      | Yes | No             | L         |
+| S    | Off    | No  | Yes            | M         |
 
 Promotion must not copy effective values into `lodState`. Removing an author promotion or changing the NEW threshold reveals the current base policy rather than restoring a snapshot.
 
@@ -168,6 +172,17 @@ Rendering decisions use effective LOD:
 - Only comments with effective S participate in S strips.
 
 An S comment promoted to M therefore breaks an existing strip at its original depth-first position. Render order remains unchanged.
+
+### Promoted reply context
+
+While an author is promoted, the direct parent of each of their real comments receives a minimum effective LOD of M. The compact parent row exposes the author, timestamp, and text preview needed to understand what the promoted comment is replying to.
+
+- Only direct parents are added by this policy; it does not recursively expand ancestors solely because they provide context. If several comments in a same-author reply chain are independently promoted, each may add its own direct parent.
+- A parent shared by several promoted replies renders once at its original position.
+- Top-level promoted comments do not create context because their parent is the story.
+- Context promotion is derived from current author promotion and the tree index. It never writes to `lodState`, and changing a promoted reply's base LOD does not remove its parent context.
+- Removing or weakening author promotion immediately removes parent context that is no longer required and reveals the parent's current base or other effective minimum.
+- NEW promotion alone does not promote parent context.
 
 The existing tree index must expose enough comment data to calculate author and NEW minima without repeatedly walking the raw tree. The implementation may add an `itemById` or `commentById` lookup to `TreeIndex` if needed.
 
@@ -242,6 +257,7 @@ Synthetic promoted-link rows and deleted comments do not expose author actions. 
 
 - [x] Add the deterministic author-color palette and promoted-author pill styling.
 - [x] Preserve fixed orange OP styling and existing NEW/just-clicked layers.
+- [x] Promote direct parents to minimum M while their replies' authors are promoted.
 - [ ] Verify promotion across initial data, hydration, and later comment arrival.
 - [ ] Verify narrow layouts with both author and subtree controls present.
 
@@ -252,6 +268,8 @@ Synthetic promoted-link rows and deleted comments do not expose author actions. 
 - **Promoted OP:** OP remains orange; Pin or Pin+ changes only minimum LOD.
 - **Comment already above its minimum:** Promotion does not reduce detail. Pinning an existing L row leaves that row L while raising the author's S comments to M.
 - **Removing promotion:** Comments immediately use their current base LOD, which may regroup effective S comments into strips.
+- **Shared context parent:** Several promoted replies may require the same parent; it renders once as a single M or L row.
+- **Deep promoted reply:** Only its direct parent receives context promotion. More distant ancestors retain their other effective LODs.
 - **NEW plus author promotion:** L author promotion wins over M NEW promotion.
 - **Clicked-row highlight:** The existing blue just-clicked state remains independent of author highlighting.
 - **No username:** No author actions render.
@@ -266,6 +284,7 @@ Synthetic promoted-link rows and deleted comments do not expose author actions. 
 - [ ] Author promotion resets on item navigation and is never persisted.
 - [ ] NEW comments render at effective M or L, never S.
 - [ ] Promoted and NEW comments keep their original depth-first positions.
+- [ ] A promoted reply whose parent would otherwise be S shows that parent at effective M without expanding the full ancestor chain.
 - [ ] Existing row, subtree, Ungroup all, and Expand all actions remain usable without clearing promotion policies.
 - [ ] New or hydrated comments inherit author and NEW promotion without resetting current thread state.
 - [ ] OP, NEW, and just-clicked visual treatments remain distinguishable.

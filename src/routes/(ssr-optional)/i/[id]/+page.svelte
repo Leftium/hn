@@ -409,11 +409,27 @@
 		return { parentOf, childrenOf, levelOf, promotedRoleOf, commentById, allIds };
 	});
 
+	// Keep the direct parent of each promoted author's reply readable as an M
+	// row so the reply retains local context even after its base LOD changes.
+	// This is derived rendering policy only; it never writes into lodState.
+	const authorContextParentIds = $derived.by(() => {
+		const parentIds = new SvelteSet<number>();
+		for (const id of treeIndex.allIds) {
+			const comment = treeIndex.commentById.get(id);
+			if (!comment?.user || comment.promotedRole) continue;
+			if (!authorPromotions.has(comment.user)) continue;
+			const parentId = treeIndex.parentOf.get(id);
+			if (parentId !== undefined && treeIndex.commentById.has(parentId)) parentIds.add(parentId);
+		}
+		return parentIds;
+	});
+
 	function getEffectiveLOD(comment: RenderHNItem): LOD {
 		let lod = getBaseLOD(comment.id);
 		const authorMinimum = comment.user ? authorPromotions.get(comment.user) : undefined;
 		if (authorMinimum) lod = moreDetailedLOD(lod, authorMinimum);
 		if (isNewComment(comment)) lod = moreDetailedLOD(lod, 'M');
+		if (authorContextParentIds.has(comment.id)) lod = moreDetailedLOD(lod, 'M');
 		return lod;
 	}
 
