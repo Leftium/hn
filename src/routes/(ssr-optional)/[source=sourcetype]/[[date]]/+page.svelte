@@ -1,9 +1,11 @@
 <script lang="ts">
 	import type { NormalizedStory } from '$lib/fetch-hckrnews';
+	import type { PathnameWithSearchOrHash } from '$app/types';
 	import { FEED_NAMES, FEED_SOURCES } from '$lib';
 	let { data } = $props();
 	import 'open-props/style';
 	import { onMount, untrack } from 'svelte';
+	import { SvelteURLSearchParams } from 'svelte/reactivity';
 	import { browser } from '$app/environment';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
@@ -44,8 +46,8 @@
 			return () => window.cancelIdleCallback(idleId);
 		}
 
-		const timeoutId = window.setTimeout(startLoading, 250);
-		return () => window.clearTimeout(timeoutId);
+		const timeoutId = setTimeout(startLoading, 250);
+		return () => clearTimeout(timeoutId);
 	});
 
 	function parseThreshold(urlValue: string | null, fallback: number | string | null | undefined) {
@@ -152,7 +154,7 @@
 	}
 
 	function withThresholdParams(path: string) {
-		const params = new URLSearchParams();
+		const params = new SvelteURLSearchParams();
 		if (page.url.searchParams.has('min_karma')) {
 			params.set('min_karma', page.url.searchParams.get('min_karma') ?? '');
 		}
@@ -373,7 +375,9 @@
 		<d-item class="more-link">
 			{#if data.previousDate}
 				<a
-					href={resolve(withThresholdParams(`/${data.source}/${data.previousDate}`))}
+					href={resolve(
+						withThresholdParams(`/${data.source}/${data.previousDate}`) as PathnameWithSearchOrHash
+					)}
 					rel="nofollow"
 				>
 					<d-metadata>
@@ -381,7 +385,12 @@
 					</d-metadata>
 				</a>
 			{:else if data.nextRange}
-				<a href={resolve(withThresholdParams(`/${data.source}/${data.nextRange}`))} rel="nofollow">
+				<a
+					href={resolve(
+						withThresholdParams(`/${data.source}/${data.nextRange}`) as PathnameWithSearchOrHash
+					)}
+					rel="nofollow"
+				>
 					<d-metadata>
 						<s-url>More...</s-url>
 					</d-metadata>
