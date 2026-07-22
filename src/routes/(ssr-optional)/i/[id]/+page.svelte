@@ -39,8 +39,10 @@
 		'light-dark(#7048a8, #bd9aee)',
 		'light-dark(#087b83, #65d2da)'
 	];
+	const DAY_SECONDS = 24 * 60 * 60;
 	const COMMENT_WINDOW_SECONDS = 14 * 24 * 60 * 60;
 	const ACTIVITY_BUCKET_COUNT = 32;
+	const MIN_NONEMPTY_ACTIVITY_HEIGHT = 0.12;
 
 	type LOD = 'L' | 'M' | 'S';
 	type AuthorPromotion = 'M' | 'L';
@@ -640,9 +642,31 @@
 	let itemViewCheckpoints = $state<ItemViewCheckpoint[]>([]);
 	let timelineNow = $state(Math.floor(Date.now() / 1000));
 	const timelineStart = $derived(displayItem?.time ?? 0);
-	const timelineEnd = $derived(
-		displayItem ? Math.min(timelineNow, displayItem.time + COMMENT_WINDOW_SECONDS) : 0
-	);
+	const latestVisibleCommentTime = $derived.by(() => {
+		let latest = timelineStart;
+
+		function walk(comments: RenderHNItem[]): void {
+			for (const comment of comments) {
+				if (isHiddenComment(comment)) continue;
+				latest = Math.max(latest, comment.time);
+				walk(comment.comments);
+			}
+		}
+
+		if (displayItem) walk(displayItem.comments);
+		return latest;
+	});
+	const timelineEnd = $derived.by(() => {
+		if (!displayItem) return 0;
+		const hardEnd = Math.max(
+			timelineStart,
+			Math.min(timelineNow, timelineStart + COMMENT_WINDOW_SECONDS)
+		);
+		const elapsedActivity = Math.max(0, latestVisibleCommentTime - timelineStart);
+		const paddedActivityEnd =
+			timelineStart + (Math.floor(elapsedActivity / DAY_SECONDS) + 1) * DAY_SECONDS;
+		return Math.min(hardEnd, paddedActivityEnd);
+	});
 	const clampedAdjustedNewCommentThreshold = $derived(
 		adjustedNewCommentThreshold === null || !displayItem
 			? null
@@ -727,9 +751,17 @@
 			counts[index] += 1;
 		}
 		const maximum = Math.max(0, ...counts);
-		return counts.map((count) => ({ count, height: maximum > 0 ? count / maximum : 0 }));
+		return counts.map((count) => ({
+			count,
+			height:
+				count === 0 || maximum === 0
+					? 0
+					: Math.max(MIN_NONEMPTY_ACTIVITY_HEIGHT, Math.sqrt(count / maximum))
+		}));
 	});
-	const timelineValue = $derived(newCommentThreshold ?? timelineEnd);
+	const timelineValue = $derived(
+		Math.max(timelineStart, Math.min(timelineEnd, newCommentThreshold ?? timelineEnd))
+	);
 	const timelineProgress = $derived(
 		timelineEnd > timelineStart
 			? Math.max(0, Math.min(1, (timelineValue - timelineStart) / (timelineEnd - timelineStart)))

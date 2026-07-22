@@ -170,11 +170,15 @@ The timeline is complex UI and stays hidden until explicitly disclosed. It must 
 
 ### Time domain
 
-The horizontal domain is:
+The horizontal domain uses actual discussion activity, with two weeks as a hard maximum rather than the default displayed width:
 
 ```txt
-item.time -> min(current time, item.time + 14 days)
+hard end     = min(current time, item.time + 14 days)
+activity end = start of the relative day after the latest visible comment
+visible end  = min(hard end, activity end)
 ```
+
+The relative-day calculation targets at least a one-day domain, capped by the current time for younger posts. For example, a thread whose latest comment arrived 5 days and 3 hours after posting ends at 6 days. A currently active thread whose padded activity end is in the future ends at now.
 
 The control displays elapsed time since the post, not calendar labels. The selected-value label uses compact relative units such as `3h after posting`, `2d 6h after posting`, or `Now`. Its accessible value text also includes the absolute local datetime.
 
@@ -193,7 +197,7 @@ Render an unlabeled histogram behind or immediately above the slider track:
 ```
 
 - Plot visible comments by creation time using approximately 32 equal-width time buckets.
-- Normalize bar height to the largest current bucket.
+- Normalize bar height to the largest current bucket using a square-root scale. Give every non-empty bucket a 12% minimum height so isolated late comments remain visible without making sparse and busy buckets look equal.
 - Do not render a y-axis, numeric y labels, grid lines, per-bar tooltips, or a legend.
 - The graph communicates relative activity only. `NEW n` remains the authoritative count.
 - Use the existing NEW orange treatment for the portion after the cutoff and a subdued neutral treatment before it.
@@ -316,7 +320,9 @@ The operation reads the current record, derives the cutoff, conditionally append
 - **Same count, different membership:** Deduplication intentionally treats this as the same checkpoint. HN comment IDs and counts do not expose a cheap stable membership signature in the current history model. The manual timeline remains the recovery path.
 - **Deleted comments lower the count:** Record a distinct checkpoint because the visible discussion state changed.
 - **Clock skew or future timestamps:** Clamp UI selection and markers to the domain; keep raw classification semantics defensive and deterministic.
-- **Post older than 14 days:** Show the full 14-day domain even if the current time is later.
+- **Post older than 14 days:** Never extend beyond day 14; the activity bound may still make the visible domain shorter.
+- **Inactive discussion:** End at the next whole relative day after its latest visible comment instead of showing an empty tail through day 14.
+- **Automatic cutoff after the visible domain:** Preserve the real timestamp for NEW classification but clamp the displayed thumb to the endpoint; both positions classify zero loaded comments as NEW.
 - **No comments:** Render an empty plot and functional endpoints; do not fabricate activity bars.
 - **All activity in one bucket:** Render that bucket at full relative height and the others empty.
 - **IndexedDB unavailable:** Keep the route usable with no automatic history; the timeline can still select a transient cutoff.
