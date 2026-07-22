@@ -10,7 +10,7 @@ Add thread-local author controls that highlight an author's comments and keep th
 
 ## Overview
 
-Fully expanded comment rows gain two compact author-scoped icon actions after the timestamp: **Pin** promotes that author's comments to at least M, and **Pin+** promotes them to L. Either action also highlights the author with a distinct color. Author promotion lasts only for the current item view and is not persisted. Independently, comments marked NEW receive a minimum LOD of M so they cannot remain buried in an S strip.
+Fully expanded comment rows gain two compact author-scoped icon actions after the timestamp: **Pin** promotes that author's comments to at least M, and **Pin+** promotes them to L. Either action also highlights the author with a distinct color. Author promotion is scoped to the current item URL and is not stored as a cross-thread preference. Independently, comments marked NEW receive a minimum LOD of M so they cannot remain buried in an S strip.
 
 The feature adds minimum-LOD policies around the existing `lodState`; it does not replace or rewrite that state.
 
@@ -44,7 +44,7 @@ In scope:
 
 Out of scope:
 
-- Persisting promoted authors across stories, navigation, or reloads.
+- Persisting promoted authors outside the current item's shareable URL.
 - User-selected colors.
 - A popover, floating menu, context menu, double-click, or long-press interaction.
 - Author controls on M rows or S strips.
@@ -224,10 +224,10 @@ NEW supplies a minimum effective LOD of M.
 
 ## Lifecycle
 
-Author promotion belongs to the displayed item view:
+Shareable lifecycle and URL behavior follow `specs/comment-view-promotion.md`:
 
-- Clear `authorPromotions` when the item id changes, alongside `lodState` and click-highlight state.
-- Do not write author promotion to IndexedDB, cookies, local storage, URL parameters, or server state.
+- Hydrate `authorPromotions` from the current item URL on initial navigation and back/forward navigation.
+- Do not write author promotion to IndexedDB, cookies, local storage, or server state. The item URL is now its only shareable representation.
 - Preserve promotion while the same item receives HNPWA/Firebase replacement or hydration updates.
 - Comments from an already promoted author inherit the policy as soon as they appear.
 
@@ -246,7 +246,7 @@ Synthetic promoted-link rows and deleted comments do not expose author actions. 
 
 ### Phase 2: Author state and controls
 
-- [x] Add thread-local `authorPromotions` state and clear it on item navigation.
+- [x] Add thread-local `authorPromotions` state, later extended with URL hydration by the companion spec.
 - [x] Add direct M/L/off action handlers using the transition table in this spec.
 - [x] Render fixed-size inline SVG pin and pin-plus buttons after the timestamp on L rows only.
 - [x] Separate author actions from subtree actions with spacing.
@@ -281,7 +281,7 @@ Synthetic promoted-link rows and deleted comments do not expose author actions. 
 - [ ] Pin highlights the author and prevents that author's comments from rendering at S.
 - [ ] Pin+ highlights the author and renders all that author's comments at L.
 - [ ] Pin and Pin+ are mutually exclusive, directly selectable, and removable with one press.
-- [ ] Author promotion resets on item navigation and is never persisted.
+- [ ] Author promotion is represented only in the current item URL and does not become a cross-thread preference.
 - [ ] NEW comments render at effective M or L, never S.
 - [ ] Promoted and NEW comments keep their original depth-first positions.
 - [ ] A promoted reply whose parent would otherwise be S shows that parent at effective M without expanding the full ancestor chain.

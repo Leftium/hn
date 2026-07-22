@@ -10,6 +10,7 @@
 		isHiddenComment
 	} from '$lib/item-view-history';
 	import { browser } from '$app/environment';
+	import { replaceState } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import { onMount, tick, untrack } from 'svelte';
@@ -78,11 +79,13 @@
 
 	function decodeHtmlEntities(value: string): string {
 		return value
-			.replace(/&#x([0-9a-f]+);/gi, (_, hex: string) => String.fromCharCode(parseInt(hex, 16)))
-			.replace(/&#(\d+);/g, (_, code: string) => String.fromCharCode(parseInt(code, 10)))
+			.replace(/&#x([0-9a-f]+);/gi, (_, hex: string) => String.fromCodePoint(parseInt(hex, 16)))
+			.replace(/&#(\d+);/g, (_, code: string) => String.fromCodePoint(parseInt(code, 10)))
 			.replace(/&amp;/g, '&')
 			.replace(/&quot;/g, '"')
+			.replace(/&apos;/g, "'")
 			.replace(/&#x27;/g, "'")
+			.replace(/&nbsp;/g, ' ')
 			.replace(/&lt;/g, '<')
 			.replace(/&gt;/g, '>');
 	}
@@ -334,6 +337,73 @@
 			.join('');
 	}
 
+	function visibleCommentText(content: string): string {
+		return decodeHtmlEntities(content.replace(/<[^>]*>/g, ' '))
+			.replace(/\s+/g, ' ')
+			.trim();
+	}
+
+	function normalizeSearchQuery(value: string): string {
+		const trimmed = value.trim();
+		return trimmed.length >= 2 ? trimmed : '';
+	}
+
+	function highlightText(text: string, query: string): string {
+		if (!query) return text;
+		const visibleUnits: string[] = [];
+		const rawRanges: { start: number; end: number }[] = [];
+		const entityPattern = /&(?:#x[0-9a-f]+|#\d+|[a-z][a-z0-9]+);/gi;
+		let sourceCursor = 0;
+
+		function appendVisible(raw: string, start: number, visible = raw): void {
+			for (let index = 0; index < visible.length; index += 1) {
+				visibleUnits.push(visible[index]);
+				rawRanges.push({
+					start: visible === raw ? start + index : start,
+					end: visible === raw ? start + index + 1 : start + raw.length
+				});
+			}
+		}
+
+		for (const match of text.matchAll(entityPattern)) {
+			const start = match.index;
+			appendVisible(text.slice(sourceCursor, start), sourceCursor);
+			const raw = match[0];
+			const decoded = decodeHtmlEntities(raw);
+			// Unknown named entities stay indivisible so a query cannot insert
+			// markup into their source spelling and corrupt the rendered HTML.
+			appendVisible(raw, start, decoded === raw ? '\uFFFC' : decoded);
+			sourceCursor = start + raw.length;
+		}
+		appendVisible(text.slice(sourceCursor), sourceCursor);
+
+		const visibleText = visibleUnits.join('');
+		const escapedQuery = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+		const matchPattern = new RegExp(escapedQuery, 'giu');
+		let rawCursor = 0;
+		let result = '';
+		for (const match of visibleText.matchAll(matchPattern)) {
+			const visibleStart = match.index;
+			const visibleEnd = visibleStart + match[0].length;
+			const rawStart = rawRanges[visibleStart]?.start;
+			const rawEnd = rawRanges[visibleEnd - 1]?.end;
+			if (rawStart === undefined || rawEnd === undefined) continue;
+			result += text.slice(rawCursor, rawStart);
+			result += `<mark class="search-match">${text.slice(rawStart, rawEnd)}</mark>`;
+			rawCursor = rawEnd;
+		}
+		return result + text.slice(rawCursor);
+	}
+
+	function highlightCommentContent(content: string, query: string): string {
+		const formatted = formatCommentContent(content);
+		if (!query) return formatted;
+		return formatted
+			.split(/(<[^>]+>)/g)
+			.map((part) => (part.startsWith('<') ? part : highlightText(part, query)))
+			.join('');
+	}
+
 	let item = $state<HNItem | null>(null);
 	let itemError = $state<string | null>(null);
 	let fullItem = $state<HNItem | null>(null);
@@ -354,7 +424,25 @@
 	// Post id may be written freely; the renderer never reads the post's entry.
 	// SvelteMap so per-id mutations (setLOD in Phase 3) trigger fine-grained rerenders.
 	const lodState = new SvelteMap<number, LOD>();
-	const authorPromotions = new SvelteMap<string, AuthorPromotion>();
+	function readAuthorPromotions(params: URLSearchParams): [string, AuthorPromotion][] {
+		const promotions: [string, AuthorPromotion][] = [];
+		for (const value of params.getAll('author')) {
+			const separator = value.lastIndexOf(':');
+			if (separator <= 0) continue;
+			const username = value.slice(0, separator);
+			const level = value.slice(separator + 1).toUpperCase();
+			if (level === 'M' || level === 'L') promotions.push([username, level]);
+		}
+		return promotions;
+	}
+
+	const authorPromotions = new SvelteMap<string, AuthorPromotion>(
+		readAuthorPromotions(page.url.searchParams)
+	);
+	let activeSearchQuery = $state(normalizeSearchQuery(page.url.searchParams.get('q') ?? ''));
+	let searchInput = $state(page.url.searchParams.get('q') ?? '');
+	let searchExpanded = $state(false);
+	let searchDebounce: ReturnType<typeof setTimeout> | undefined;
 	let newCommentThreshold = $state<number | null>(null);
 
 	function getBaseLOD(id: number): LOD {
@@ -409,15 +497,28 @@
 		return { parentOf, childrenOf, levelOf, promotedRoleOf, commentById, allIds };
 	});
 
-	// Keep the direct parent of each promoted author's reply readable as an M
-	// row so the reply retains local context even after its base LOD changes.
+	const searchMatchIds = $derived.by(() => {
+		const ids = new SvelteSet<number>();
+		if (!activeSearchQuery) return ids;
+		const query = activeSearchQuery.toLocaleLowerCase();
+		for (const id of treeIndex.allIds) {
+			const comment = treeIndex.commentById.get(id);
+			if (!comment?.content || comment.promotedRole) continue;
+			if (visibleCommentText(comment.content).toLocaleLowerCase().includes(query)) ids.add(id);
+		}
+		return ids;
+	});
+
+	// Keep the direct parent of each author- or search-promoted reply readable as
+	// an M row so the reply retains local context after its base LOD changes.
 	// This is derived rendering policy only; it never writes into lodState.
-	const authorContextParentIds = $derived.by(() => {
+	const promotionContextParentIds = $derived.by(() => {
 		const parentIds = new SvelteSet<number>();
 		for (const id of treeIndex.allIds) {
 			const comment = treeIndex.commentById.get(id);
-			if (!comment?.user || comment.promotedRole) continue;
-			if (!authorPromotions.has(comment.user)) continue;
+			if (!comment || comment.promotedRole) continue;
+			const authorPromoted = !!comment.user && authorPromotions.has(comment.user);
+			if (!authorPromoted && !searchMatchIds.has(id)) continue;
 			const parentId = treeIndex.parentOf.get(id);
 			if (parentId !== undefined && treeIndex.commentById.has(parentId)) parentIds.add(parentId);
 		}
@@ -428,8 +529,9 @@
 		let lod = getBaseLOD(comment.id);
 		const authorMinimum = comment.user ? authorPromotions.get(comment.user) : undefined;
 		if (authorMinimum) lod = moreDetailedLOD(lod, authorMinimum);
+		if (searchMatchIds.has(comment.id)) lod = moreDetailedLOD(lod, 'L');
 		if (isNewComment(comment)) lod = moreDetailedLOD(lod, 'M');
-		if (authorContextParentIds.has(comment.id)) lod = moreDetailedLOD(lod, 'M');
+		if (promotionContextParentIds.has(comment.id)) lod = moreDetailedLOD(lod, 'M');
 		return lod;
 	}
 
@@ -735,9 +837,56 @@
 		return AUTHOR_COLORS[(hash >>> 0) % AUTHOR_COLORS.length];
 	}
 
+	function replaceViewUrl(query: string, promotions: ReadonlyMap<string, AuthorPromotion>): void {
+		if (!browser) return;
+		const url = new URL(page.url);
+		url.searchParams.delete('q');
+		url.searchParams.delete('author');
+		const normalizedQuery = normalizeSearchQuery(query);
+		if (normalizedQuery) url.searchParams.set('q', normalizedQuery);
+		for (const [username, level] of [...promotions].sort(
+			([nameA, levelA], [nameB, levelB]) =>
+				nameA.localeCompare(nameB) || levelA.localeCompare(levelB)
+		)) {
+			url.searchParams.append('author', `${username}:${level.toLowerCase()}`);
+		}
+		if (url.href === page.url.href) return;
+		// eslint-disable-next-line svelte/no-navigation-without-resolve -- updates only the current route's query parameters
+		replaceState(url, page.state);
+	}
+
+	function cancelPendingSearchUpdate(): void {
+		if (!searchDebounce) return;
+		clearTimeout(searchDebounce);
+		searchDebounce = undefined;
+	}
+
+	function hydratePromotionState(url: URL): void {
+		cancelPendingSearchUpdate();
+		const urlQuery = url.searchParams.get('q') ?? '';
+		searchInput = urlQuery;
+		activeSearchQuery = normalizeSearchQuery(urlQuery);
+		authorPromotions.clear();
+		for (const [username, level] of readAuthorPromotions(url.searchParams)) {
+			authorPromotions.set(username, level);
+		}
+		if (activeSearchQuery) searchExpanded = true;
+	}
+
 	function toggleAuthorPromotion(username: string, level: AuthorPromotion): void {
 		if (authorPromotions.get(username) === level) authorPromotions.delete(username);
 		else authorPromotions.set(username, level);
+		replaceViewUrl(activeSearchQuery, authorPromotions);
+	}
+
+	function scheduleSearchUpdate(value: string): void {
+		searchInput = value;
+		cancelPendingSearchUpdate();
+		searchDebounce = setTimeout(() => {
+			activeSearchQuery = normalizeSearchQuery(value);
+			replaceViewUrl(activeSearchQuery, authorPromotions);
+			searchDebounce = undefined;
+		}, 175);
 	}
 
 	async function onAuthorPromotionClick(
@@ -867,11 +1016,15 @@
 		if (id === lodItemId) return;
 
 		lodState.clear();
-		authorPromotions.clear();
 		highlightedIds.clear();
 		ungroupAllFlag = false;
 		lodItemId = id;
-		if (id !== null) untrack(() => applyDefaultPolicy(false));
+		if (id !== null) {
+			untrack(() => {
+				applyDefaultPolicy(false);
+				hydratePromotionState(page.url);
+			});
+		}
 	});
 
 	// As progressively loaded comments appear, default only the new ids. Existing
@@ -921,6 +1074,18 @@
 			ungroupAllFlag = true;
 			setLOD(allStripMembers(), 'M');
 		}
+	}
+
+	function onResetView(): void {
+		cancelPendingSearchUpdate();
+		searchInput = '';
+		activeSearchQuery = '';
+		authorPromotions.clear();
+		highlightedIds.clear();
+		ungroupAllFlag = false;
+		lodState.clear();
+		applyDefaultPolicy(false);
+		replaceViewUrl('', authorPromotions);
 	}
 
 	// --- Phase 5.2: per-L row action predicates + handlers ---
@@ -1309,6 +1474,9 @@
 	});
 
 	onMount(() => {
+		const onPopState = () => hydratePromotionState(new URL(window.location.href));
+		window.addEventListener('popstate', onPopState);
+
 		// Expose LOD primitives to window for DevTools testing (removed in Phase 5).
 		(window as LodDevToolsWindow).__lod = {
 			get state() {
@@ -1327,6 +1495,11 @@
 			subtreeOf,
 			siblingsOf,
 			allComments
+		};
+
+		return () => {
+			window.removeEventListener('popstate', onPopState);
+			cancelPendingSearchUpdate();
 		};
 	});
 
@@ -1543,10 +1716,10 @@
 				{/if}
 				{#if lod === 'L'}
 					{#if !isSynthetic && !isDead && !isDeleted && comment.user}
-						<s-author-actions>
+						<s-author-actions role="group" aria-label="Promote comments by {comment.user}">
 							<button
 								type="button"
-								class="author-promotion-btn"
+								class="author-promotion-btn inline secondary"
 								class:active={authorPromotion === 'M'}
 								aria-pressed={authorPromotion === 'M'}
 								aria-label="Pin comments by {comment.user}"
@@ -1559,7 +1732,7 @@
 							</button>
 							<button
 								type="button"
-								class="author-promotion-btn"
+								class="author-promotion-btn inline secondary"
 								class:active={authorPromotion === 'L'}
 								aria-pressed={authorPromotion === 'L'}
 								aria-label="Pin and fully expand comments by {comment.user}"
@@ -1578,10 +1751,10 @@
 					{@const b1Active = hasKids && repliesAllL(comment.id)}
 					{@const b2Active = hasDesc && subtreeAllL(comment.id)}
 					{@const b3Active = hasDesc && subtreeNoS(comment.id)}
-					<s-lod-actions>
+					<s-lod-actions role="group" aria-label="Comment thread view">
 						<button
 							type="button"
-							class="lod-row-btn"
+							class="lod-row-btn inline secondary"
 							class:active={b1Active}
 							aria-pressed={b1Active}
 							aria-label="Expand direct replies"
@@ -1602,7 +1775,7 @@
 						</button>
 						<button
 							type="button"
-							class="lod-row-btn"
+							class="lod-row-btn inline secondary"
 							class:active={b3Active}
 							aria-pressed={b3Active}
 							disabled={!hasDesc || allLActive}
@@ -1622,7 +1795,7 @@
 						</button>
 						<button
 							type="button"
-							class="lod-row-btn"
+							class="lod-row-btn inline secondary"
 							class:active={b2Active}
 							aria-pressed={b2Active}
 							disabled={!hasDesc}
@@ -1646,7 +1819,10 @@
 			{#if comment.content && !isDead}
 				<d-comment-body>
 					<!-- eslint-disable-next-line svelte/no-at-html-tags -- HN API returns intentional comment HTML -->
-					{@html formatCommentContent(comment.content)}
+					{@html highlightCommentContent(
+						comment.content,
+						searchMatchIds.has(comment.id) ? activeSearchQuery : ''
+					)}
 				</d-comment-body>
 			{/if}
 			<!-- Dev UI (Phase 3): LOD toggle buttons. Gated by ?dev=1. Replaced in Phase 5. -->
@@ -1780,41 +1956,81 @@
 		<d-header>
 			<d-nav>
 				<button type="button" class="back-btn" onclick={goBack}> ← Back </button>
-				<d-lod-toolbar>
-					<button
-						type="button"
-						class="lod-toolbar-btn"
-						class:active={ungroupAllActive}
-						aria-pressed={ungroupAllActive}
-						disabled={allLActive}
-						title="Show every comment (no grouped strips)"
-						onclick={async (e) => {
-							const anchor = e.currentTarget as HTMLElement;
-							const rectBefore = anchor.getBoundingClientRect();
-							const snap = snapshotLayout();
-							onUngroupAll();
-							await animateLayoutChange(snap, anchor, rectBefore);
-						}}
-					>
-						Ungroup all
-					</button>
-					<button
-						type="button"
-						class="lod-toolbar-btn"
-						class:active={allLActive}
-						aria-pressed={allLActive}
-						title="Expand all comments to full detail"
-						onclick={async (e) => {
-							const anchor = e.currentTarget as HTMLElement;
-							const rectBefore = anchor.getBoundingClientRect();
-							const snap = snapshotLayout();
-							onExpandAll();
-							await animateLayoutChange(snap, anchor, rectBefore);
-						}}
-					>
-						Expand all
-					</button>
-				</d-lod-toolbar>
+				<d-view-controls>
+					<d-view-search id="comment-view-search" role="search" class:expanded={searchExpanded}>
+						<label class="visually-hidden" for="comment-search">Search comments</label>
+						<input
+							id="comment-search"
+							type="search"
+							placeholder="Search comments"
+							value={searchInput}
+							oninput={(e) => scheduleSearchUpdate(e.currentTarget.value)}
+						/>
+					</d-view-search>
+					<d-view-toolbar role="group" aria-label="Comment view">
+						<button
+							type="button"
+							class="view-toolbar-btn secondary"
+							class:active={ungroupAllActive}
+							aria-pressed={ungroupAllActive}
+							disabled={allLActive}
+							title="Show every comment (no grouped strips)"
+							onclick={async (e) => {
+								const anchor = e.currentTarget as HTMLElement;
+								const rectBefore = anchor.getBoundingClientRect();
+								const snap = snapshotLayout();
+								onUngroupAll();
+								await animateLayoutChange(snap, anchor, rectBefore);
+							}}
+						>
+							Ungroup
+						</button>
+						<button
+							type="button"
+							class="view-toolbar-btn secondary"
+							class:active={allLActive}
+							aria-pressed={allLActive}
+							title="Expand all comments to full detail"
+							onclick={async (e) => {
+								const anchor = e.currentTarget as HTMLElement;
+								const rectBefore = anchor.getBoundingClientRect();
+								const snap = snapshotLayout();
+								onExpandAll();
+								await animateLayoutChange(snap, anchor, rectBefore);
+							}}
+						>
+							Expand
+						</button>
+						<button
+							type="button"
+							class="view-toolbar-btn secondary"
+							title="Restore the default comment view and clear promotions"
+							onclick={async (e) => {
+								const anchor = e.currentTarget as HTMLElement;
+								const rectBefore = anchor.getBoundingClientRect();
+								const snap = snapshotLayout();
+								onResetView();
+								await animateLayoutChange(snap, anchor, rectBefore);
+							}}
+						>
+							Reset
+						</button>
+						<button
+							type="button"
+							class="view-toolbar-btn view-toggle-btn secondary"
+							class:active={searchExpanded || !!activeSearchQuery || authorPromotions.size > 0}
+							aria-label="View options"
+							aria-expanded={searchExpanded}
+							aria-controls="comment-view-search"
+							title="View options"
+							onclick={() => (searchExpanded = !searchExpanded)}
+						>
+							<svg class="tune-icon" viewBox="0 0 24 24" aria-hidden="true">
+								<path d="M4 7h10M18 7h2M4 17h2M10 17h10M14 4v6M6 14v6" />
+							</svg>
+						</button>
+					</d-view-toolbar>
+				</d-view-controls>
 			</d-nav>
 
 			<d-item-header>
@@ -1914,10 +2130,10 @@
 	}
 
 	d-nav {
-		display: flex;
-		align-items: center;
+		display: grid;
+		grid-template-columns: auto minmax(8rem, 1fr) auto;
+		align-items: start;
 		gap: var(--size-2);
-		flex-wrap: wrap;
 		padding: var(--size-2);
 		border-bottom: 1px solid light-dark(#e6e6df, #3a3a3a);
 	}
@@ -1939,38 +2155,116 @@
 		}
 	}
 
-	d-lod-toolbar {
-		display: inline-flex;
-		gap: var(--size-1);
-		margin-inline-start: auto;
+	d-view-controls {
+		display: contents;
 	}
 
-	.lod-toolbar-btn {
-		padding: var(--size-1) var(--size-2);
-		font-size: var(--font-size-1);
-		background: light-dark(#f5f5f5, #2a2a2a);
+	d-view-toolbar {
+		grid-column: 3;
+		justify-self: end;
+		margin-bottom: 0;
+	}
+
+	:is(d-view-toolbar, s-author-actions, s-lod-actions)[role='group'] {
 		border: 1px solid light-dark(#ccc, #444);
-		border-radius: 4px;
-		cursor: pointer;
-		color: light-dark(#666, #999);
-		transition: all 0.15s ease;
+		border-radius: var(--nc-radius);
+
+		> button {
+			border: 0;
+		}
+
+		> button + button::before {
+			background: light-dark(rgb(0 0 0 / 0.18), rgb(255 255 255 / 0.22));
+		}
+	}
+
+	:is(.view-toolbar-btn, .author-promotion-btn, .lod-row-btn) {
+		color: light-dark(#666, #aaa);
+		background-color: light-dark(#f5f5f5, #2a2a2a);
+		border-color: light-dark(#f5f5f5, #2a2a2a);
 
 		&:hover:not(:disabled) {
-			background: light-dark(#e0e0e0, #333);
-			border-color: light-dark(#999, #666);
-			color: light-dark(#333, #ccc);
+			color: light-dark(#333, #ddd);
+			background-color: light-dark(#e0e0e0, #383838);
+			border-color: light-dark(#e0e0e0, #383838);
 		}
+	}
+
+	.view-toolbar-btn {
+		--_btn-padding-v: var(--size-1);
+		--_btn-padding-h: var(--size-2);
+
+		font-size: var(--font-size-1);
+		white-space: nowrap;
 
 		&.active {
-			/* Active state: inset shadow instead of color change — conveys
-			   pressed-ness without introducing a new visual weight. */
 			box-shadow: inset 0 1px 3px light-dark(rgb(0 0 0 / 0.15), rgb(0 0 0 / 0.35));
-			border-color: light-dark(#999, #666);
+			background-color: light-dark(#e0e0e0, #383838);
+		}
+	}
+
+	.tune-icon {
+		display: block;
+		width: 1em;
+		height: 1em;
+		fill: none;
+		stroke: currentColor;
+		stroke-width: 2;
+		stroke-linecap: round;
+	}
+
+	.view-toggle-btn {
+		display: none;
+	}
+
+	/* Tune is absent at wider widths, so Reset is the visible end of the group. */
+	.view-toolbar-btn:nth-last-child(2) {
+		border-start-end-radius: var(--nc-radius);
+		border-end-end-radius: var(--nc-radius);
+	}
+
+	d-view-search {
+		display: block;
+		grid-column: 2;
+		width: 100%;
+		box-sizing: border-box;
+
+		input {
+			min-height: 0;
+			height: calc(1.5em + 2 * var(--size-1) + 2px);
+			padding-block: var(--size-1);
+			font-size: var(--font-size-1);
+			margin-bottom: 0;
+		}
+	}
+
+	@media (max-width: 640px) {
+		d-nav {
+			grid-template-columns: auto 1fr;
 		}
 
-		&:disabled {
-			opacity: 0.4;
-			cursor: not-allowed;
+		d-view-toolbar {
+			grid-column: 2;
+		}
+
+		d-view-search {
+			grid-column: 1 / -1;
+			grid-row: 2;
+		}
+	}
+
+	@media (max-width: 400px) {
+		.view-toggle-btn {
+			display: inline-block;
+		}
+
+		.view-toolbar-btn:nth-last-child(2) {
+			border-start-end-radius: 0;
+			border-end-end-radius: 0;
+		}
+
+		d-view-search:not(.expanded) {
+			display: none;
 		}
 	}
 
@@ -1979,41 +2273,25 @@
 	   than overflow. Smaller and lighter than the global toolbar buttons
 	   since they repeat on every L row. */
 	s-lod-actions {
-		display: inline-flex;
-		flex-wrap: wrap;
-		gap: var(--size-1);
 		margin-inline-start: auto;
+		margin-bottom: 0;
 	}
 
 	s-author-actions {
-		display: inline-flex;
-		align-items: center;
-		gap: 1px;
+		margin-bottom: 0;
 	}
 
 	.author-promotion-btn {
 		display: inline-grid;
 		place-items: center;
 		box-sizing: border-box;
-		width: 18px;
-		height: 18px;
+		width: 16px;
+		height: 16px;
 		padding: 2px;
-		color: light-dark(#666, #999);
-		background: light-dark(#f5f5f5, #2a2a2a);
-		border: 1px solid light-dark(#ddd, #3a3a3a);
-		border-radius: 3px;
-		cursor: pointer;
-
-		&:hover {
-			color: light-dark(#333, #ddd);
-			background: light-dark(#e8e8e8, #333);
-			border-color: light-dark(#bbb, #555);
-		}
 
 		&.active {
 			color: var(--author-promotion-color);
-			background: light-dark(#e5e5e5, #383838);
-			border-color: currentColor;
+			background-color: light-dark(#e0e0e0, #383838);
 			box-shadow: inset 0 1px 3px light-dark(rgb(0 0 0 / 0.15), rgb(0 0 0 / 0.35));
 		}
 
@@ -2033,30 +2311,15 @@
 	}
 
 	.lod-row-btn {
-		padding: 0 var(--size-2);
+		--_btn-padding-v: 0;
+		--_btn-padding-h: var(--size-2);
+
 		font-size: var(--font-size-0);
 		line-height: 1.6;
-		background: light-dark(#f5f5f5, #2a2a2a);
-		border: 1px solid light-dark(#ddd, #3a3a3a);
-		border-radius: 3px;
-		cursor: pointer;
-		color: light-dark(#666, #999);
-		transition: all 0.15s ease;
-
-		&:hover:not(:disabled) {
-			background: light-dark(#e8e8e8, #333);
-			border-color: light-dark(#bbb, #555);
-			color: light-dark(#333, #ccc);
-		}
 
 		&.active {
 			box-shadow: inset 0 1px 3px light-dark(rgb(0 0 0 / 0.15), rgb(0 0 0 / 0.35));
-			border-color: light-dark(#999, #666);
-		}
-
-		&:disabled {
-			opacity: 0.4;
-			cursor: not-allowed;
+			background-color: light-dark(#e0e0e0, #383838);
 		}
 	}
 
@@ -2561,6 +2824,14 @@
 	}
 
 	d-comment-body :global {
+		mark.search-match {
+			padding: 0 0.08em;
+			color: inherit;
+			background: light-dark(#ffe08a, #755b00);
+			border-radius: 2px;
+			box-decoration-break: clone;
+		}
+
 		p {
 			margin: 0 0 0.8em;
 
