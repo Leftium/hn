@@ -16,7 +16,7 @@ The item route has:
 - a two-character minimum and 175 ms debounce;
 - one entity-safe pass that emits both keyed `<mark>` elements and the occurrence list used by promotion, counting, and navigation;
 - search-match minimum LOD L and direct-parent context minimum M;
-- shareable `q` and repeated `author` URL parameters;
+- shareable `q`, `m`, and `l` URL parameters;
 - previous/next navigation with wrapping and transient active-target styling;
 - NEW and author target providers;
 - a sticky header with a compact state;
@@ -33,7 +33,7 @@ search lane:    [query......................... x] | 2 / 12 | previous | next
 
 The highlight lane is primary and visible whenever NEW or promoted-author sources are available. Search starts as a small disclosure button; its lane appears only while the search UI is open or a valid query is active. Search never gets replaced by an author label.
 
-Both lanes can remain active without changing each other's policy or position. NEW has automatic priority after visit history resolves, with the first promoted author as the fallback when no source is selected. Sticky compact mode retains the useful navigator controls, and copied URLs recreate search and author promotion without serializing transient navigation choices.
+Both lanes can remain active without changing each other's policy or position. The first promoted author has automatic priority after visit history resolves, with NEW as the fallback when no authors are promoted. Sticky compact mode retains the useful navigator controls, and copied URLs recreate search and ordered author promotion without serializing transient navigation choices.
 
 ## Boundaries
 
@@ -223,6 +223,8 @@ current / total | previous | next
 
 If no source is selected or selected sources have zero targets, show a subdued `0 / 0` and disable the arrows. Keeping these controls mounted prevents pill selection from shifting the layout. There is no separate clear action: users deselect selected pills directly. When promoted authors are available, deselecting the final source activates the first author again. Deselecting pills does not clear NEW state, unpin authors, remove URL parameters, or affect search.
 
+Until the user changes the pill selection, automatic selection follows the rendered pill order: promoted authors in promotion order, then NEW when no authors are promoted. Repeated `m` and `l` URL parameters preserve that order. Adding another promoted author appends it without changing the active author, and a shared URL reconstructs the same active author. After manual pill interaction, preserve the user's selection except when unavailable sources must be removed.
+
 ## Shared Reading Anchor
 
 The existing persistent blue click highlight is the visible reading anchor shared by both navigation lanes. It does not add another control or visual state.
@@ -269,14 +271,13 @@ The sticky stack must account for `env(safe-area-inset-top)` and must not cover 
 ## URL Contract
 
 ```txt
-/i/123?q=realtime%20real-time%20streaming&author=alice%3Am
+/i/123?q=realtime%20real-time%20streaming&m=alice&l=bob
 ```
 
 - `q` stores the literal-alternative expression.
-- Repeated `author=username:level` values store author promotion.
-- Supported author levels are `m` and `l`.
-- Invalid alternatives and malformed author values are ignored.
-- Author entries serialize by username, then level, for stable URLs.
+- Repeated `m=username` and `l=username` values promote authors at those levels.
+- Empty author values and unrelated parameters are ignored.
+- Author entries serialize in promotion order; the first promoted author is automatically active.
 - User actions update reactive state before replacing the current URL.
 - URL edits replace history rather than adding an entry per search keystroke or pin action.
 - Initial navigation and `popstate` hydrate search and author policy.
@@ -365,8 +366,9 @@ The implementation is complete when all of the following remain true:
 - The blue selection is a shared reading anchor for both independent lanes.
 - NEW-only navigation jumps between consecutive runs; Search, author-only, and mixed-source navigation remain exact.
 - Search and author promotion restore from item URLs.
+- Automatic author selection is stable when a shared item URL is opened.
 - Search starts open when no highlight pills are available; otherwise its disclosure remains independent from highlight navigation.
-- NEW has automatic priority, with the first promoted author selected when no source remains active.
+- The first promoted author has automatic priority; NEW is automatic only when no authors are promoted.
 - An author-only lane automatically selects its first promoted author.
 - Multiple selected highlight sources produce a deduplicated comment list.
 - There is no All pinned control or promoted-authors scope.

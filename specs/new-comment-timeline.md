@@ -149,6 +149,8 @@ effectiveNewCommentThreshold = adjustedNewCommentThreshold ?? automaticNewCommen
 
 The existing NEW consumers use the effective threshold.
 
+Whenever the highlight navigation displays one or more positive-count source pills, one source is active. Until the user changes the pill selection, the first promoted author is active when authors are available; otherwise NEW is active. If a timeline adjustment reduces NEW to zero, its pill and selection disappear. Raising the count above zero restores NEW automatically only when there are no promoted authors and the user has not changed the pill selection.
+
 The adjusted value is local to the current page instance. Do not serialize it in the URL or IndexedDB. Reloading or creating a fresh item-route instance starts from the automatic cutoff derived for that load. Checkpoint recording remains independent of timeline adjustment.
 
 ## Timeline Control
@@ -334,6 +336,7 @@ The operation reads the current record, derives the cutoff, conditionally append
 - [ ] The timeline stays hidden until Filter is disclosed and does not interfere with Search disclosure.
 - [ ] The plot conveys relative comment activity without a y-axis or numeric activity labels.
 - [ ] Slider and marker changes feed the existing single NEW threshold behavior.
+- [ ] Whenever positive-count highlight pills are visible, the first available pill is active if no other source is selected.
 - [ ] Every load starts from the automatic cutoff; timeline adjustments remain local to that page instance.
 - [ ] The control works with pointer, touch, keyboard, narrow layouts, and progressive hydration.
 - [ ] Existing search, author promotion, LOD, NEW badge, count, and navigation behavior continue to pass their checks.

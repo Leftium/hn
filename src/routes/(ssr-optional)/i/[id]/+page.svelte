@@ -608,12 +608,9 @@
 	const lodState = new SvelteMap<number, LOD>();
 	function readAuthorPromotions(params: URLSearchParams): [string, AuthorPromotion][] {
 		const promotions: [string, AuthorPromotion][] = [];
-		for (const value of params.getAll('author')) {
-			const separator = value.lastIndexOf(':');
-			if (separator <= 0) continue;
-			const username = value.slice(0, separator);
-			const level = value.slice(separator + 1).toUpperCase();
-			if (level === 'M' || level === 'L') promotions.push([username, level]);
+		for (const [name, username] of params) {
+			if (!username || (name !== 'm' && name !== 'l')) continue;
+			promotions.push([username, name === 'm' ? 'M' : 'L']);
 		}
 		return promotions;
 	}
@@ -629,7 +626,7 @@
 	let activeSearchNavigationKey = $state<string | null>(null);
 	const selectedHighlightSources = new SvelteSet<HighlightSource>();
 	let activeHighlightNavigationKey = $state<string | null>(null);
-	let highlightSelectionInitializedForItem = $state<number | null>(null);
+	let highlightSelectionManuallyChanged = $state(false);
 	let newCommentTrackingInitializedForItem = $state<number | null>(null);
 	let searchDisclosureInitializedForItem = $state<number | null>(null);
 	let filterExpanded = $state(false);
@@ -894,11 +891,21 @@
 				selectedHighlightSources.delete(source);
 			}
 		}
-		const selectionInitialized =
-			displayItem?.id !== undefined && highlightSelectionInitializedForItem === displayItem.id;
-		if (selectionInitialized && selectedHighlightSources.size === 0 && authorPromotions.size > 0) {
-			const firstAuthor = [...authorPromotions.keys()].sort((a, b) => a.localeCompare(b))[0];
-			selectedHighlightSources.add(`author:${firstAuthor}`);
+		const firstAuthor = authorPromotions.keys().next().value;
+		const automaticSource: HighlightSource | null = firstAuthor
+			? `author:${firstAuthor}`
+			: newCommentCount > 0
+				? 'new'
+				: null;
+		if (
+			!highlightSelectionManuallyChanged &&
+			automaticSource &&
+			(selectedHighlightSources.size !== 1 || !selectedHighlightSources.has(automaticSource))
+		) {
+			selectedHighlightSources.clear();
+			selectedHighlightSources.add(automaticSource);
+		} else if (selectedHighlightSources.size === 0 && automaticSource) {
+			selectedHighlightSources.add(automaticSource);
 		}
 		const targets = highlightNavigationTargets;
 		if (targets.length === 0) {
@@ -1273,14 +1280,12 @@
 		if (!browser) return;
 		const url = new URL(page.url);
 		url.searchParams.delete('q');
-		url.searchParams.delete('author');
+		url.searchParams.delete('m');
+		url.searchParams.delete('l');
 		const normalizedQuery = normalizeSearchQuery(query);
 		if (normalizedQuery) url.searchParams.set('q', normalizedQuery);
-		for (const [username, level] of [...promotions].sort(
-			([nameA, levelA], [nameB, levelB]) =>
-				nameA.localeCompare(nameB) || levelA.localeCompare(levelB)
-		)) {
-			url.searchParams.append('author', `${username}:${level.toLowerCase()}`);
+		for (const [username, level] of promotions) {
+			url.searchParams.append(level.toLowerCase(), username);
 		}
 		if (url.href === page.url.href) return;
 		// eslint-disable-next-line svelte/no-navigation-without-resolve -- updates only the current route's query parameters
@@ -1337,6 +1342,7 @@
 	}
 
 	function toggleHighlightSource(source: HighlightSource): void {
+		highlightSelectionManuallyChanged = true;
 		if (selectedHighlightSources.has(source)) selectedHighlightSources.delete(source);
 		else selectedHighlightSources.add(source);
 	}
@@ -1642,6 +1648,7 @@
 		activeSearchNavigationKey = null;
 		selectedHighlightSources.clear();
 		activeHighlightNavigationKey = null;
+		highlightSelectionManuallyChanged = false;
 		searchExpanded = false;
 		authorPromotions.clear();
 		highlightedIds.clear();
@@ -1953,13 +1960,6 @@
 		return { items, failedIds };
 	}
 
-	function initializeNewHighlightSelection(itemId: number): void {
-		if (highlightSelectionInitializedForItem === itemId || newCommentCount === 0) return;
-		selectedHighlightSources.add('new');
-		activeHighlightNavigationKey = null;
-		highlightSelectionInitializedForItem = itemId;
-	}
-
 	async function hydrateItem(itemId: number): Promise<void> {
 		const run = ++hydrateRun;
 		const completed = new SvelteSet<number>();
@@ -1970,7 +1970,6 @@
 		automaticNewCommentThreshold = view.automaticThreshold;
 		itemViewCheckpoints = view.visits;
 		newCommentTrackingInitializedForItem = itemId;
-		initializeNewHighlightSelection(itemId);
 
 		for (const topLevelComment of displayItem.comments) {
 			while (run === hydrateRun && displayItem?.id === itemId) {
@@ -2002,7 +2001,6 @@
 				const nextFullItem = displayItem ? mergeHydratedItems(displayItem, hydratedItems) : null;
 				fullItem = nextFullItem;
 				if (!nextFullItem) break;
-				initializeNewHighlightSelection(itemId);
 				await tick();
 			}
 		}
@@ -2026,7 +2024,7 @@
 		selectedHighlightSources.clear();
 		activeHighlightNavigationKey = null;
 		previousHighlightNavigationTargets = [];
-		highlightSelectionInitializedForItem = null;
+		highlightSelectionManuallyChanged = false;
 		newCommentTrackingInitializedForItem = null;
 		searchDisclosureInitializedForItem = null;
 		searchExpanded = false;
@@ -2783,6 +2781,16 @@
 					{#if highlightLaneAvailable}
 						<d-highlight-cluster>
 							<d-highlight-pills role="group" aria-label="Highlight navigation sources">
+								{#each authorPromotions.keys() as username (username)}
+									<button
+										type="button"
+										class="scope-pill author-scope"
+										style:--scope-color={authorColor(username)}
+										class:active={selectedHighlightSources.has(`author:${username}`)}
+										aria-pressed={selectedHighlightSources.has(`author:${username}`)}
+										onclick={() => toggleHighlightSource(`author:${username}`)}>{username}</button
+									>
+								{/each}
 								{#if newCommentCount > 0}
 									<button
 										type="button"
@@ -2793,16 +2801,6 @@
 										onclick={() => toggleHighlightSource('new')}>NEW {newCommentCount}</button
 									>
 								{/if}
-								{#each [...authorPromotions.keys()].sort( (a, b) => a.localeCompare(b) ) as username (username)}
-									<button
-										type="button"
-										class="scope-pill author-scope"
-										style:--scope-color={authorColor(username)}
-										class:active={selectedHighlightSources.has(`author:${username}`)}
-										aria-pressed={selectedHighlightSources.has(`author:${username}`)}
-										onclick={() => toggleHighlightSource(`author:${username}`)}>{username}</button
-									>
-								{/each}
 							</d-highlight-pills>
 							<d-highlight-controls class:inactive={selectedHighlightSources.size === 0}>
 								<s-navigation-status aria-live="polite"
