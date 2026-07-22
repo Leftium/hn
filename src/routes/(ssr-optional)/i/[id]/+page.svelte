@@ -591,11 +591,12 @@
 	const displayTree = $derived(displayItem ? addPromotedLinksThread(displayItem) : null);
 	const domain = $derived(displayItem ? displayItem.domain || domainify(displayItem.url) : '');
 
-	// Used for view history; displayed count stays on API metadata to avoid hydration churn.
+	// Use the same visibility rule for history and the displayed count. HN's
+	// descendants metadata can lag behind its current kids tree.
 	const visibleCommentCount = $derived(
 		displayItem ? countVisibleComments(displayItem.comments) : 0
 	);
-	const displayedCommentCount = $derived(displayItem?.comments_count ?? 0);
+	const displayedCommentCount = $derived(visibleCommentCount);
 
 	// --- LOD (Level of Detail) state ---
 	// Single source of truth for per-comment render state. Missing key ⇒ default 'L'.
@@ -626,12 +627,17 @@
 	const selectedHighlightSources = new SvelteSet<HighlightSource>();
 	let activeHighlightNavigationKey = $state<string | null>(null);
 	let highlightSelectionInitializedForItem = $state<number | null>(null);
+	let newCommentTrackingInitializedForItem = $state<number | null>(null);
 	let searchDisclosureInitializedForItem = $state<number | null>(null);
 	let navigationHeaderCompact = $state(false);
 	let navigationSentinel = $state<HTMLElement>();
 	let searchDebounce: ReturnType<typeof setTimeout> | undefined;
 	let newCommentThreshold = $state<number | null>(null);
-	let newCommentCount = $state(0);
+	const newCommentCount = $derived(
+		displayItem && newCommentThreshold !== null
+			? countNewComments(displayItem.comments, newCommentThreshold)
+			: 0
+	);
 
 	function getBaseLOD(id: number): LOD {
 		return lodState.get(id) ?? 'L';
@@ -850,7 +856,7 @@
 		const itemId = displayItem?.id;
 		if (
 			itemId === undefined ||
-			highlightSelectionInitializedForItem !== itemId ||
+			newCommentTrackingInitializedForItem !== itemId ||
 			searchDisclosureInitializedForItem === itemId
 		) {
 			return;
@@ -1731,15 +1737,21 @@
 	let hydrateRun = 0;
 	const HYDRATE_BATCH_SIZE = 12;
 	const HYDRATE_DEPTH = 2;
+	const HYDRATE_MAX_ATTEMPTS = 2;
 
-	function collectUnloadedParents(comment: HNItem, seen: { has(id: number): boolean }): number[] {
+	function collectUnloadedParents(
+		comment: HNItem,
+		completed: ReadonlySet<number>,
+		attempts: ReadonlyMap<number, number>
+	): number[] {
 		const ids: number[] = [];
 
 		function walk(node: HNItem) {
 			const hasPreviewChildren = node.comments.some((child) => !firebaseLoadedIds.has(child.id));
 			if (
 				node.kids.length > 0 &&
-				!seen.has(node.id) &&
+				!completed.has(node.id) &&
+				(attempts.get(node.id) ?? 0) < HYDRATE_MAX_ATTEMPTS &&
 				(node.comments.length === 0 || hasPreviewChildren)
 			) {
 				ids.push(node.id);
@@ -1811,32 +1823,42 @@
 		return { ...root, comments: root.comments.map(mergeNode) };
 	}
 
-	async function loadHydratedBatch(itemId: number, ids: number[]): Promise<HNItem[] | null> {
-		const items = await Promise.all(
+	async function loadHydratedBatch(
+		ids: number[]
+	): Promise<{ items: HNItem[]; failedIds: number[] }> {
+		const results = await Promise.allSettled(
 			ids.map((id) => fetchHNItemTree(id, fetch, { maxDepth: HYDRATE_DEPTH }))
 		);
-		return items.filter((loadedItem) => ids.includes(loadedItem.id));
+		const items: HNItem[] = [];
+		const failedIds: number[] = [];
+		for (const [index, result] of results.entries()) {
+			if (result.status === 'fulfilled') items.push(result.value);
+			else failedIds.push(ids[index]);
+		}
+		return { items, failedIds };
+	}
+
+	function initializeNewHighlightSelection(itemId: number): void {
+		if (highlightSelectionInitializedForItem === itemId || newCommentCount === 0) return;
+		selectedHighlightSources.add('new');
+		activeHighlightNavigationKey = null;
+		highlightSelectionInitializedForItem = itemId;
 	}
 
 	async function hydrateItem(itemId: number): Promise<void> {
 		const run = ++hydrateRun;
-		const seen = new SvelteSet<number>();
+		const completed = new SvelteSet<number>();
+		const attempts = new SvelteMap<number, number>();
 		const previous = await getItemView(itemId);
 		if (run !== hydrateRun || !displayItem) return;
 
 		if (previous) {
 			newCommentThreshold = previous.viewedAt;
-			newCommentCount = countNewComments(displayItem.comments, previous.viewedAt);
 		} else {
 			newCommentThreshold = null;
-			newCommentCount = 0;
 		}
-		if (highlightSelectionInitializedForItem !== itemId) {
-			selectedHighlightSources.clear();
-			activeHighlightNavigationKey = null;
-			if (newCommentCount > 0) selectedHighlightSources.add('new');
-			highlightSelectionInitializedForItem = itemId;
-		}
+		newCommentTrackingInitializedForItem = itemId;
+		initializeNewHighlightSelection(itemId);
 
 		await recordItemView(itemId, visibleCommentCount);
 
@@ -1847,23 +1869,30 @@
 					: null;
 				if (!currentTopLevelComment) break;
 
-				const ids = collectUnloadedParents(currentTopLevelComment, seen).slice(
+				const ids = collectUnloadedParents(currentTopLevelComment, completed, attempts).slice(
 					0,
 					HYDRATE_BATCH_SIZE
 				);
 				if (ids.length === 0) break;
-				for (const id of ids) seen.add(id);
+				for (const id of ids) attempts.set(id, (attempts.get(id) ?? 0) + 1);
 
-				const hydratedItems = await loadHydratedBatch(itemId, ids);
-				if (run !== hydrateRun || displayItem?.id !== itemId || !hydratedItems) break;
-				for (const hydratedItem of hydratedItems) markFirebaseLoaded(hydratedItem);
+				const { items: hydratedItems, failedIds } = await loadHydratedBatch(ids);
+				if (run !== hydrateRun || displayItem?.id !== itemId) break;
+				for (const hydratedItem of hydratedItems) {
+					completed.add(hydratedItem.id);
+					markFirebaseLoaded(hydratedItem);
+				}
+				const exhaustedIds = failedIds.filter(
+					(id) => (attempts.get(id) ?? 0) >= HYDRATE_MAX_ATTEMPTS
+				);
+				if (exhaustedIds.length > 0) {
+					console.warn('Firebase comment hydration failed after retry', exhaustedIds);
+				}
 
 				const nextFullItem = displayItem ? mergeHydratedItems(displayItem, hydratedItems) : null;
 				fullItem = nextFullItem;
 				if (!nextFullItem) break;
-				if (previous) {
-					newCommentCount = countNewComments(nextFullItem.comments, previous.viewedAt);
-				}
+				initializeNewHighlightSelection(itemId);
 				await recordItemView(itemId, countVisibleComments(nextFullItem.comments));
 				await tick();
 			}
@@ -1882,57 +1911,55 @@
 		fullItem = null;
 		itemError = null;
 		newCommentThreshold = null;
-		newCommentCount = 0;
 		selectedHighlightSources.clear();
 		activeHighlightNavigationKey = null;
 		previousHighlightNavigationTargets = [];
 		highlightSelectionInitializedForItem = null;
+		newCommentTrackingInitializedForItem = null;
 		searchDisclosureInitializedForItem = null;
 		searchExpanded = false;
 
-		let hnpwaFailed = false;
-		let firebaseLoaded = false;
-		let firebaseFailed = false;
-		let hydrationStarted = false;
+		const hnpwaRequest = fetchHnpwaItem(id, fetch);
+		const firebaseRequest = fetchHNItemTree(id, fetch, { maxDepth: 1 });
 
-		function startHydration() {
-			if (hydrationStarted || displayItem?.id !== id) return;
-			hydrationStarted = true;
-			void hydrateItem(id);
-		}
-
-		function showErrorIfBothSourcesFailed() {
-			if (!item && hnpwaFailed && firebaseFailed) itemError = `Item ${id} not found`;
-		}
-
-		void fetchHnpwaItem(id, fetch)
-			.then((loadedItem) => {
-				if (cancelled || firebaseLoaded) return;
+		// HNPWA is the fast, complete preview. Render it immediately when it
+		// wins, but coordinate both sources before beginning Firebase hydration.
+		void hnpwaRequest.then(
+			(loadedItem) => {
+				if (cancelled) return;
 				itemError = null;
 				item = loadedItem;
-				startHydration();
-			})
-			.catch((error) => {
-				if (cancelled) return;
-				hnpwaFailed = true;
-				console.warn('HNPWA item fetch failed', error);
-				showErrorIfBothSourcesFailed();
-			});
+			},
+			(error) => {
+				if (!cancelled) console.warn('HNPWA item fetch failed', error);
+			}
+		);
 
-		void fetchHNItemTree(id, fetch, { maxDepth: 1 })
-			.then((loadedItem) => {
+		void Promise.allSettled([hnpwaRequest, firebaseRequest]).then(
+			([hnpwaResult, firebaseResult]) => {
 				if (cancelled) return;
-				firebaseLoaded = true;
-				markFirebaseLoaded(loadedItem);
-				item =
-					displayItem?.id === loadedItem.id ? mergeAdditive(loadedItem, displayItem) : loadedItem;
-				startHydration();
-			})
-			.catch(() => {
-				if (cancelled) return;
-				firebaseFailed = true;
-				showErrorIfBothSourcesFailed();
-			});
+
+				if (firebaseResult.status === 'rejected') {
+					console.warn('Firebase item fetch failed', firebaseResult.reason);
+				}
+
+				if (firebaseResult.status === 'fulfilled') {
+					markFirebaseLoaded(firebaseResult.value);
+					item =
+						hnpwaResult.status === 'fulfilled'
+							? mergeAdditive(firebaseResult.value, hnpwaResult.value)
+							: firebaseResult.value;
+				} else if (hnpwaResult.status === 'fulfilled') {
+					item = hnpwaResult.value;
+				} else {
+					itemError = `Item ${id} not found`;
+					return;
+				}
+
+				itemError = null;
+				void hydrateItem(id);
+			}
+		);
 
 		return () => {
 			cancelled = true;
@@ -2075,6 +2102,42 @@
 	</svg>
 {/snippet}
 
+{#snippet authorPromotionActions(username: string)}
+	<s-author-actions
+		role="group"
+		aria-label="Promote comments by {username}"
+		style:--author-promotion-color={authorColor(username)}
+	>
+		<button
+			type="button"
+			class="author-promotion-btn inline secondary"
+			class:active={authorPromotions.get(username) === 'M'}
+			aria-pressed={authorPromotions.get(username) === 'M'}
+			aria-label="Pin comments by {username}"
+			title="Highlight {username} and keep their comments visible"
+			onclick={(e) => onAuthorPromotionClick(e, username, 'M')}
+		>
+			<svg viewBox="0 0 24 24" aria-hidden="true">
+				<path d="M8 3h8l-1 6 3 3v2h-5v7l-1 1-1-1v-7H6v-2l3-3z" />
+			</svg>
+		</button>
+		<button
+			type="button"
+			class="author-promotion-btn inline secondary"
+			class:active={authorPromotions.get(username) === 'L'}
+			aria-pressed={authorPromotions.get(username) === 'L'}
+			aria-label="Pin and fully expand comments by {username}"
+			title="Highlight {username} and fully expand their comments"
+			onclick={(e) => onAuthorPromotionClick(e, username, 'L')}
+		>
+			<svg viewBox="0 0 24 24" aria-hidden="true">
+				<path d="M7 4h7l-1 5 3 3v2h-4v7l-1 1-1-1v-7H5v-2l3-3z" />
+				<path class="plus" d="M18 3v6M15 6h6" />
+			</svg>
+		</button>
+	</s-author-actions>
+{/snippet}
+
 {#snippet commentRow(comment: RenderHNItem, level: number)}
 	{@const lod = getEffectiveLOD(comment)}
 	{@const isDead = comment.content === '<p>[dead]'}
@@ -2198,35 +2261,7 @@
 				{/if}
 				{#if lod === 'L'}
 					{#if !isSynthetic && !isDead && !isDeleted && comment.user}
-						<s-author-actions role="group" aria-label="Promote comments by {comment.user}">
-							<button
-								type="button"
-								class="author-promotion-btn inline secondary"
-								class:active={authorPromotion === 'M'}
-								aria-pressed={authorPromotion === 'M'}
-								aria-label="Pin comments by {comment.user}"
-								title="Highlight {comment.user} and keep their comments visible"
-								onclick={(e) => onAuthorPromotionClick(e, comment.user!, 'M')}
-							>
-								<svg viewBox="0 0 24 24" aria-hidden="true">
-									<path d="M8 3h8l-1 6 3 3v2h-5v7l-1 1-1-1v-7H6v-2l3-3z" />
-								</svg>
-							</button>
-							<button
-								type="button"
-								class="author-promotion-btn inline secondary"
-								class:active={authorPromotion === 'L'}
-								aria-pressed={authorPromotion === 'L'}
-								aria-label="Pin and fully expand comments by {comment.user}"
-								title="Highlight {comment.user} and fully expand their comments"
-								onclick={(e) => onAuthorPromotionClick(e, comment.user!, 'L')}
-							>
-								<svg viewBox="0 0 24 24" aria-hidden="true">
-									<path d="M7 4h7l-1 5 3 3v2h-4v7l-1 1-1-1v-7H5v-2l3-3z" />
-									<path class="plus" d="M18 3v6M15 6h6" />
-								</svg>
-							</button>
-						</s-author-actions>
+						{@render authorPromotionActions(comment.user)}
 					{/if}
 					{@const hasKids = directChildrenOf(comment.id).length > 0}
 					{@const hasDesc = descendantsOf(comment.id).length > 0}
@@ -2681,10 +2716,13 @@
 					</s-points>
 					<s-time>{relativeTime(item.time)}</s-time>
 					{#if item.user}
-						<s-user>
-							<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- external HN URL -->
-							by <a href={hnUserUrl} class="meta-link">{item.user}</a>
-						</s-user>
+						<s-item-author>
+							<s-user>
+								<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- external HN URL -->
+								by <a href={hnUserUrl} class="meta-link">{item.user}</a>
+							</s-user>
+							{@render authorPromotionActions(item.user)}
+						</s-item-author>
 					{/if}
 					<s-hn-link>
 						<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- external HN URL -->
@@ -3078,18 +3116,17 @@
 			background: transparent;
 			border: 1px solid var(--scope-color);
 			border-radius: 999px;
-
-			&:hover {
-				color: light-dark(#fff, #111);
-				background: var(--scope-color);
-			}
-
-			&.active {
-				color: light-dark(#fff, #111);
-				background: var(--scope-color);
-				box-shadow: inset 0 1px 2px rgb(0 0 0 / 0.22);
-			}
 		}
+	}
+
+	d-highlight-pills .scope-pill:hover,
+	d-highlight-pills .scope-pill.active {
+		color: light-dark(#fff, #111);
+		background: var(--scope-color);
+	}
+
+	d-highlight-pills .scope-pill.active {
+		box-shadow: inset 0 1px 2px rgb(0 0 0 / 0.22);
 	}
 
 	@media (max-width: 640px) {
@@ -3342,6 +3379,17 @@
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
+	}
+
+	s-item-author {
+		display: inline-flex;
+		gap: 0.5ch;
+		align-items: center;
+		min-width: 0;
+
+		s-author-actions {
+			flex: 0 0 auto;
+		}
 	}
 
 	.meta-link {
