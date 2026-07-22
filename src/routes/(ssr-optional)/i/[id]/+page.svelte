@@ -337,19 +337,78 @@
 			.join('');
 	}
 
-	function visibleCommentText(content: string): string {
-		return decodeHtmlEntities(content.replace(/<[^>]*>/g, ' '))
-			.replace(/\s+/g, ' ')
-			.trim();
-	}
-
 	function normalizeSearchQuery(value: string): string {
-		const trimmed = value.trim();
-		return trimmed.length >= 2 ? trimmed : '';
+		return parseSearchTerms(value).length > 0 ? value.trim() : '';
 	}
 
-	function highlightText(text: string, query: string): string {
-		if (!query) return text;
+	interface SearchTerm {
+		value: string;
+		normalized: string;
+		index: number;
+	}
+
+	interface TextMatch {
+		rawStart: number;
+		rawEnd: number;
+		visibleStart: number;
+		visibleEnd: number;
+		termIndex: number;
+	}
+
+	interface SearchOccurrence extends TextMatch {
+		key: string;
+		commentId: number;
+		textNodeIndex: number;
+	}
+
+	interface CommentSearchPlan {
+		html: string;
+		occurrences: SearchOccurrence[];
+	}
+
+	type HighlightSource = 'new' | `author:${string}`;
+
+	interface NavigationTarget {
+		key: string;
+		commentId: number;
+		selector: string;
+	}
+
+	function parseSearchTerms(value: string): SearchTerm[] {
+		const terms: SearchTerm[] = [];
+		const seen = new SvelteSet<string>();
+		let cursor = 0;
+		while (cursor < value.length) {
+			while (cursor < value.length && /\s/u.test(value[cursor])) cursor += 1;
+			if (cursor >= value.length) break;
+
+			let term: string;
+			if (value[cursor] === '"') {
+				const start = ++cursor;
+				while (cursor < value.length && value[cursor] !== '"') cursor += 1;
+				term = value.slice(start, cursor).trim();
+				if (cursor < value.length) cursor += 1;
+			} else {
+				const start = cursor;
+				while (cursor < value.length && !/\s/u.test(value[cursor])) cursor += 1;
+				term = value.slice(start, cursor);
+			}
+
+			if (term.length < 2) continue;
+			const normalized = term.toLocaleLowerCase();
+			if (seen.has(normalized)) continue;
+			seen.add(normalized);
+			terms.push({ value: term, normalized, index: terms.length });
+		}
+		return terms;
+	}
+
+	function escapeRegExp(value: string): string {
+		return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+	}
+
+	function findTextMatches(text: string, terms: SearchTerm[]): TextMatch[] {
+		if (terms.length === 0) return [];
 		const visibleUnits: string[] = [];
 		const rawRanges: { start: number; end: number }[] = [];
 		const entityPattern = /&(?:#x[0-9a-f]+|#\d+|[a-z][a-z0-9]+);/gi;
@@ -378,30 +437,66 @@
 		appendVisible(text.slice(sourceCursor), sourceCursor);
 
 		const visibleText = visibleUnits.join('');
-		const escapedQuery = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-		const matchPattern = new RegExp(escapedQuery, 'giu');
-		let rawCursor = 0;
-		let result = '';
+		const orderedTerms = [...terms].sort(
+			(a, b) => b.value.length - a.value.length || a.index - b.index
+		);
+		const matchPattern = new RegExp(
+			orderedTerms.map((term) => escapeRegExp(term.value)).join('|'),
+			'giu'
+		);
+		const matches: TextMatch[] = [];
 		for (const match of visibleText.matchAll(matchPattern)) {
 			const visibleStart = match.index;
 			const visibleEnd = visibleStart + match[0].length;
 			const rawStart = rawRanges[visibleStart]?.start;
 			const rawEnd = rawRanges[visibleEnd - 1]?.end;
 			if (rawStart === undefined || rawEnd === undefined) continue;
-			result += text.slice(rawCursor, rawStart);
-			result += `<mark class="search-match">${text.slice(rawStart, rawEnd)}</mark>`;
-			rawCursor = rawEnd;
+			const normalizedMatch = match[0].toLocaleLowerCase();
+			const term = orderedTerms.find((candidate) => candidate.normalized === normalizedMatch);
+			if (!term) continue;
+			matches.push({ rawStart, rawEnd, visibleStart, visibleEnd, termIndex: term.index });
 		}
-		return result + text.slice(rawCursor);
+		return matches;
 	}
 
-	function highlightCommentContent(content: string, query: string): string {
+	function buildCommentSearchPlan(
+		commentId: number,
+		content: string,
+		terms: SearchTerm[]
+	): CommentSearchPlan {
 		const formatted = formatCommentContent(content);
-		if (!query) return formatted;
-		return formatted
+		const occurrences: SearchOccurrence[] = [];
+		if (terms.length === 0) return { html: formatted, occurrences };
+
+		let textNodeIndex = 0;
+		const html = formatted
 			.split(/(<[^>]+>)/g)
-			.map((part) => (part.startsWith('<') ? part : highlightText(part, query)))
+			.map((part) => {
+				if (part.startsWith('<')) return part;
+				const matches = findTextMatches(part, terms);
+				const currentTextNodeIndex = textNodeIndex++;
+				if (matches.length === 0) return part;
+
+				let cursor = 0;
+				let result = '';
+				for (const match of matches) {
+					const key = `${commentId}:${currentTextNodeIndex}:${match.rawStart}:${match.rawEnd}:${match.termIndex}`;
+					const occurrence = {
+						...match,
+						key,
+						commentId,
+						textNodeIndex: currentTextNodeIndex
+					};
+					occurrences.push(occurrence);
+					result += part.slice(cursor, match.rawStart);
+					result += `<mark class="search-match" data-navigation-key="${key}">${part.slice(match.rawStart, match.rawEnd)}</mark>`;
+					cursor = match.rawEnd;
+				}
+				return result + part.slice(cursor);
+			})
 			.join('');
+
+		return { html, occurrences };
 	}
 
 	let item = $state<HNItem | null>(null);
@@ -439,11 +534,21 @@
 	const authorPromotions = new SvelteMap<string, AuthorPromotion>(
 		readAuthorPromotions(page.url.searchParams)
 	);
-	let activeSearchQuery = $state(normalizeSearchQuery(page.url.searchParams.get('q') ?? ''));
+	const initialSearchQuery = normalizeSearchQuery(page.url.searchParams.get('q') ?? '');
+	let activeSearchQuery = $state(initialSearchQuery);
 	let searchInput = $state(page.url.searchParams.get('q') ?? '');
-	let searchExpanded = $state(false);
+	let searchExpanded = $state(!!initialSearchQuery);
+	let searchElement = $state<HTMLInputElement>();
+	let activeSearchNavigationKey = $state<string | null>(null);
+	const selectedHighlightSources = new SvelteSet<HighlightSource>();
+	let activeHighlightNavigationKey = $state<string | null>(null);
+	let highlightSelectionInitializedForItem = $state<number | null>(null);
+	let searchDisclosureInitializedForItem = $state<number | null>(null);
+	let navigationHeaderCompact = $state(false);
+	let navigationSentinel = $state<HTMLElement>();
 	let searchDebounce: ReturnType<typeof setTimeout> | undefined;
 	let newCommentThreshold = $state<number | null>(null);
+	let newCommentCount = $state(0);
 
 	function getBaseLOD(id: number): LOD {
 		return lodState.get(id) ?? 'L';
@@ -497,17 +602,22 @@
 		return { parentOf, childrenOf, levelOf, promotedRoleOf, commentById, allIds };
 	});
 
-	const searchMatchIds = $derived.by(() => {
-		const ids = new SvelteSet<number>();
-		if (!activeSearchQuery) return ids;
-		const query = activeSearchQuery.toLocaleLowerCase();
+	const activeSearchTerms = $derived(parseSearchTerms(activeSearchQuery));
+	const searchPlanByComment = $derived.by(() => {
+		const plans = new SvelteMap<number, CommentSearchPlan>();
+		if (activeSearchTerms.length === 0) return plans;
 		for (const id of treeIndex.allIds) {
 			const comment = treeIndex.commentById.get(id);
 			if (!comment?.content || comment.promotedRole) continue;
-			if (visibleCommentText(comment.content).toLocaleLowerCase().includes(query)) ids.add(id);
+			const plan = buildCommentSearchPlan(id, comment.content, activeSearchTerms);
+			if (plan.occurrences.length > 0) plans.set(id, plan);
 		}
-		return ids;
+		return plans;
 	});
+	const searchOccurrences = $derived(
+		treeIndex.allIds.flatMap((id) => searchPlanByComment.get(id)?.occurrences ?? [])
+	);
+	const searchMatchIds = $derived(new SvelteSet(searchPlanByComment.keys()));
 
 	// Keep the direct parent of each author- or search-promoted reply readable as
 	// an M row so the reply retains local context after its base LOD changes.
@@ -523,6 +633,144 @@
 			if (parentId !== undefined && treeIndex.commentById.has(parentId)) parentIds.add(parentId);
 		}
 		return parentIds;
+	});
+
+	const searchNavigationTargets = $derived<NavigationTarget[]>(
+		searchOccurrences.map((occurrence) => ({
+			key: occurrence.key,
+			commentId: occurrence.commentId,
+			selector: `[data-navigation-key="${occurrence.key}"]`
+		}))
+	);
+	const highlightNavigationTargets = $derived.by<NavigationTarget[]>(() => {
+		const targets: NavigationTarget[] = [];
+		for (const id of treeIndex.allIds) {
+			const comment = treeIndex.commentById.get(id);
+			if (!comment || comment.promotedRole) continue;
+			const matchesNew = selectedHighlightSources.has('new') && isNewComment(comment);
+			const matchesAuthor =
+				!!comment.user && selectedHighlightSources.has(`author:${comment.user}`);
+			if (!matchesNew && !matchesAuthor) continue;
+			targets.push({
+				key: `highlight:${id}`,
+				commentId: id,
+				selector: `d-comment[data-comment-id="${id}"]`
+			});
+		}
+		return targets;
+	});
+	const activeSearchNavigationIndex = $derived(
+		activeSearchNavigationKey
+			? searchNavigationTargets.findIndex((target) => target.key === activeSearchNavigationKey)
+			: -1
+	);
+	const activeHighlightNavigationIndex = $derived(
+		activeHighlightNavigationKey
+			? highlightNavigationTargets.findIndex(
+					(target) => target.key === activeHighlightNavigationKey
+				)
+			: -1
+	);
+	const activeHighlightNavigationCommentId = $derived(
+		activeHighlightNavigationIndex >= 0
+			? highlightNavigationTargets[activeHighlightNavigationIndex]?.commentId
+			: undefined
+	);
+	const highlightLaneAvailable = $derived(newCommentCount > 0 || authorPromotions.size > 0);
+	const navigationVisible = $derived(
+		highlightLaneAvailable || searchExpanded || !!activeSearchQuery
+	);
+
+	$effect(() => {
+		const targets = searchNavigationTargets;
+		if (targets.length === 0) {
+			activeSearchNavigationKey = null;
+			return;
+		}
+		if (
+			!activeSearchNavigationKey ||
+			!targets.some((target) => target.key === activeSearchNavigationKey)
+		) {
+			activeSearchNavigationKey = targets[0].key;
+		}
+	});
+
+	let activeSearchMark: HTMLElement | null = null;
+	$effect(() => {
+		const activeKey = activeSearchNavigationKey;
+		const target = searchNavigationTargets.find((candidate) => candidate.key === activeKey);
+		if (!browser) return;
+		void tick().then(() => {
+			if (activeKey !== activeSearchNavigationKey) return;
+			activeSearchMark?.classList.remove('active-search-match');
+			activeSearchMark = target ? document.querySelector<HTMLElement>(target.selector) : null;
+			activeSearchMark?.classList.add('active-search-match');
+		});
+	});
+
+	let previousHighlightNavigationTargets: NavigationTarget[] = [];
+	$effect(() => {
+		for (const source of selectedHighlightSources) {
+			if (source === 'new' ? newCommentCount === 0 : !authorPromotions.has(source.slice(7))) {
+				selectedHighlightSources.delete(source);
+			}
+		}
+		const selectionInitialized =
+			displayItem?.id !== undefined && highlightSelectionInitializedForItem === displayItem.id;
+		if (selectionInitialized && selectedHighlightSources.size === 0 && authorPromotions.size > 0) {
+			const firstAuthor = [...authorPromotions.keys()].sort((a, b) => a.localeCompare(b))[0];
+			selectedHighlightSources.add(`author:${firstAuthor}`);
+		}
+		const targets = highlightNavigationTargets;
+		if (targets.length === 0) {
+			activeHighlightNavigationKey = null;
+			previousHighlightNavigationTargets = targets;
+			return;
+		}
+		if (!activeHighlightNavigationKey) {
+			activeHighlightNavigationKey = targets[0].key;
+		} else if (!targets.some((target) => target.key === activeHighlightNavigationKey)) {
+			const previousTarget = previousHighlightNavigationTargets.find(
+				(target) => target.key === activeHighlightNavigationKey
+			);
+			const previousTreeIndex = previousTarget
+				? treeIndex.allIds.indexOf(previousTarget.commentId)
+				: -1;
+			if (previousTreeIndex >= 0) {
+				activeHighlightNavigationKey = targets.reduce((nearest, candidate) => {
+					const nearestDistance = Math.abs(
+						treeIndex.allIds.indexOf(nearest.commentId) - previousTreeIndex
+					);
+					const candidateDistance = Math.abs(
+						treeIndex.allIds.indexOf(candidate.commentId) - previousTreeIndex
+					);
+					return candidateDistance < nearestDistance ? candidate : nearest;
+				}).key;
+			} else {
+				const previousIndex = previousHighlightNavigationTargets.findIndex(
+					(target) => target.key === activeHighlightNavigationKey
+				);
+				const survivingPreviousTarget = previousHighlightNavigationTargets
+					.map((target, index) => ({ target, distance: Math.abs(index - previousIndex) }))
+					.filter(({ target }) => targets.some((candidate) => candidate.key === target.key))
+					.sort((a, b) => a.distance - b.distance)[0]?.target;
+				activeHighlightNavigationKey = survivingPreviousTarget?.key ?? targets[0].key;
+			}
+		}
+		previousHighlightNavigationTargets = targets;
+	});
+
+	$effect(() => {
+		const itemId = displayItem?.id;
+		if (
+			itemId === undefined ||
+			highlightSelectionInitializedForItem !== itemId ||
+			searchDisclosureInitializedForItem === itemId
+		) {
+			return;
+		}
+		if (!highlightLaneAvailable) searchExpanded = true;
+		searchDisclosureInitializedForItem = itemId;
 	});
 
 	function getEffectiveLOD(comment: RenderHNItem): LOD {
@@ -870,23 +1118,100 @@
 		for (const [username, level] of readAuthorPromotions(url.searchParams)) {
 			authorPromotions.set(username, level);
 		}
-		if (activeSearchQuery) searchExpanded = true;
+		activeSearchNavigationKey = null;
+		if (activeSearchQuery) {
+			searchExpanded = true;
+		}
 	}
 
 	function toggleAuthorPromotion(username: string, level: AuthorPromotion): void {
-		if (authorPromotions.get(username) === level) authorPromotions.delete(username);
-		else authorPromotions.set(username, level);
+		if (authorPromotions.get(username) === level) {
+			authorPromotions.delete(username);
+			selectedHighlightSources.delete(`author:${username}`);
+		} else authorPromotions.set(username, level);
 		replaceViewUrl(activeSearchQuery, authorPromotions);
 	}
 
 	function scheduleSearchUpdate(value: string): void {
 		searchInput = value;
 		cancelPendingSearchUpdate();
+		if (value === '') {
+			activeSearchQuery = '';
+			activeSearchNavigationKey = null;
+			replaceViewUrl('', authorPromotions);
+			return;
+		}
 		searchDebounce = setTimeout(() => {
 			activeSearchQuery = normalizeSearchQuery(value);
+			activeSearchNavigationKey = null;
 			replaceViewUrl(activeSearchQuery, authorPromotions);
 			searchDebounce = undefined;
 		}, 175);
+	}
+
+	function toggleHighlightSource(source: HighlightSource): void {
+		if (selectedHighlightSources.has(source)) selectedHighlightSources.delete(source);
+		else selectedHighlightSources.add(source);
+	}
+
+	async function moveNavigation(
+		targets: NavigationTarget[],
+		activeIndex: number,
+		direction: 1 | -1,
+		setActiveKey: (key: string) => void
+	): Promise<void> {
+		if (targets.length === 0) return;
+		const current = activeIndex >= 0 ? activeIndex : 0;
+		const next = (current + direction + targets.length) % targets.length;
+		const target = targets[next];
+		setActiveKey(target.key);
+		await tick();
+		const element = document.querySelector<HTMLElement>(target.selector);
+		if (!element) return;
+		const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+		element.scrollIntoView({ behavior: reducedMotion ? 'auto' : 'smooth', block: 'center' });
+	}
+
+	function closeSearch(): void {
+		searchExpanded = false;
+	}
+
+	async function discloseSearch(): Promise<void> {
+		searchExpanded = true;
+		await tick();
+		searchElement?.focus();
+	}
+
+	function toggleSearch(): void {
+		if (searchExpanded) closeSearch();
+		else void discloseSearch();
+	}
+
+	function clearSearchOrClose(): void {
+		if (searchInput) {
+			cancelPendingSearchUpdate();
+			searchInput = '';
+			activeSearchQuery = '';
+			activeSearchNavigationKey = null;
+			replaceViewUrl('', authorPromotions);
+			return;
+		}
+		closeSearch();
+	}
+
+	function onSearchKeydown(event: KeyboardEvent): void {
+		if (event.key === 'Enter') {
+			event.preventDefault();
+			void moveNavigation(
+				searchNavigationTargets,
+				activeSearchNavigationIndex,
+				event.shiftKey ? -1 : 1,
+				(key) => (activeSearchNavigationKey = key)
+			);
+		} else if (event.key === 'Escape') {
+			event.preventDefault();
+			clearSearchOrClose();
+		}
 	}
 
 	async function onAuthorPromotionClick(
@@ -1080,6 +1405,10 @@
 		cancelPendingSearchUpdate();
 		searchInput = '';
 		activeSearchQuery = '';
+		activeSearchNavigationKey = null;
+		selectedHighlightSources.clear();
+		activeHighlightNavigationKey = null;
+		searchExpanded = false;
 		authorPromotions.clear();
 		highlightedIds.clear();
 		ungroupAllFlag = false;
@@ -1267,7 +1596,6 @@
 
 	// New-comment tracking: threshold is the viewedAt from the previous visit.
 	// null = first visit (no highlights). Set on mount from IndexedDB.
-	let newCommentCount = $state(0);
 	type LodDevToolsWindow = Window & {
 		__lod?: {
 			readonly state: typeof lodState;
@@ -1388,6 +1716,12 @@
 			newCommentThreshold = null;
 			newCommentCount = 0;
 		}
+		if (highlightSelectionInitializedForItem !== itemId) {
+			selectedHighlightSources.clear();
+			activeHighlightNavigationKey = null;
+			if (newCommentCount > 0) selectedHighlightSources.add('new');
+			highlightSelectionInitializedForItem = itemId;
+		}
 
 		await recordItemView(itemId, visibleCommentCount);
 
@@ -1427,14 +1761,30 @@
 
 		let cancelled = false;
 		hydrateRun++;
+		cancelPendingSearchUpdate();
 		firebaseLoadedIds.clear();
 		item = null;
 		fullItem = null;
 		itemError = null;
+		newCommentThreshold = null;
+		newCommentCount = 0;
+		selectedHighlightSources.clear();
+		activeHighlightNavigationKey = null;
+		previousHighlightNavigationTargets = [];
+		highlightSelectionInitializedForItem = null;
+		searchDisclosureInitializedForItem = null;
+		searchExpanded = false;
 
 		let hnpwaFailed = false;
 		let firebaseLoaded = false;
 		let firebaseFailed = false;
+		let hydrationStarted = false;
+
+		function startHydration() {
+			if (hydrationStarted || displayItem?.id !== id) return;
+			hydrationStarted = true;
+			void hydrateItem(id);
+		}
 
 		function showErrorIfBothSourcesFailed() {
 			if (!item && hnpwaFailed && firebaseFailed) itemError = `Item ${id} not found`;
@@ -1445,6 +1795,7 @@
 				if (cancelled || firebaseLoaded) return;
 				itemError = null;
 				item = loadedItem;
+				startHydration();
 			})
 			.catch((error) => {
 				if (cancelled) return;
@@ -1460,7 +1811,7 @@
 				markFirebaseLoaded(loadedItem);
 				item =
 					displayItem?.id === loadedItem.id ? mergeAdditive(loadedItem, displayItem) : loadedItem;
-				void hydrateItem(id);
+				startHydration();
 			})
 			.catch(() => {
 				if (cancelled) return;
@@ -1476,6 +1827,19 @@
 	onMount(() => {
 		const onPopState = () => hydratePromotionState(new URL(window.location.href));
 		window.addEventListener('popstate', onPopState);
+		const updateNavigationHeaderCompact = () => {
+			if (!navigationSentinel) return;
+			navigationHeaderCompact = navigationSentinel.getBoundingClientRect().bottom <= 0;
+		};
+		const navigationObserver = new IntersectionObserver(([entry]) => {
+			navigationHeaderCompact = !entry.isIntersecting && entry.boundingClientRect.bottom <= 0;
+		});
+		if (navigationSentinel) navigationObserver.observe(navigationSentinel);
+		window.addEventListener('scroll', updateNavigationHeaderCompact, {
+			passive: true,
+			capture: true
+		});
+		updateNavigationHeaderCompact();
 
 		// Expose LOD primitives to window for DevTools testing (removed in Phase 5).
 		(window as LodDevToolsWindow).__lod = {
@@ -1499,6 +1863,8 @@
 
 		return () => {
 			window.removeEventListener('popstate', onPopState);
+			window.removeEventListener('scroll', updateNavigationHeaderCompact, true);
+			navigationObserver.disconnect();
 			cancelPendingSearchUpdate();
 		};
 	});
@@ -1639,6 +2005,7 @@
 		class:new-comment={isNew}
 		class:preview={!isSynthetic && !firebaseLoadedIds.has(comment.id)}
 		class:just-clicked={highlightedIds.has(comment.id)}
+		class:navigation-target-active={activeHighlightNavigationCommentId === comment.id}
 		data-comment-id={comment.id}
 		data-lod={lod}
 		data-level={level}
@@ -1819,10 +2186,7 @@
 			{#if comment.content && !isDead}
 				<d-comment-body>
 					<!-- eslint-disable-next-line svelte/no-at-html-tags -- HN API returns intentional comment HTML -->
-					{@html highlightCommentContent(
-						comment.content,
-						searchMatchIds.has(comment.id) ? activeSearchQuery : ''
-					)}
+					{@html searchPlanByComment.get(comment.id)?.html ?? formatCommentContent(comment.content)}
 				</d-comment-body>
 			{/if}
 			<!-- Dev UI (Phase 3): LOD toggle buttons. Gated by ?dev=1. Replaced in Phase 5. -->
@@ -1942,6 +2306,62 @@
 	</d-comment-strip>
 {/snippet}
 
+{#snippet searchNavigator()}
+	<d-view-search id="comment-view-search" role="search">
+		<label class="visually-hidden" for="comment-search">Search comments</label>
+		<d-search-input>
+			<input
+				bind:this={searchElement}
+				id="comment-search"
+				type="search"
+				placeholder="Search comments"
+				title={searchInput || 'Use quotes to match a phrase'}
+				enterkeyhint="search"
+				autocomplete="off"
+				spellcheck="false"
+				value={searchInput}
+				oninput={(e) => scheduleSearchUpdate(e.currentTarget.value)}
+				onkeydown={onSearchKeydown}
+			/>
+			<s-navigation-status aria-live="polite">
+				{searchNavigationTargets.length === 0 || activeSearchNavigationIndex < 0
+					? '0 / 0'
+					: `${activeSearchNavigationIndex + 1} / ${searchNavigationTargets.length}`}
+			</s-navigation-status>
+			<button
+				type="button"
+				class="navigator-btn"
+				disabled={searchNavigationTargets.length === 0}
+				aria-label="Previous search match"
+				onclick={() =>
+					moveNavigation(
+						searchNavigationTargets,
+						activeSearchNavigationIndex,
+						-1,
+						(key) => (activeSearchNavigationKey = key)
+					)}
+			>
+				<svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3 10 5-5 5 5" /></svg>
+			</button>
+			<button
+				type="button"
+				class="navigator-btn"
+				disabled={searchNavigationTargets.length === 0}
+				aria-label="Next search match"
+				onclick={() =>
+					moveNavigation(
+						searchNavigationTargets,
+						activeSearchNavigationIndex,
+						1,
+						(key) => (activeSearchNavigationKey = key)
+					)}
+			>
+				<svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3 6 5 5 5-5" /></svg>
+			</button>
+		</d-search-input>
+	</d-view-search>
+{/snippet}
+
 <svelte:head>
 	<title>{displayItem?.title || 'HN Reader'}</title>
 </svelte:head>
@@ -1953,86 +2373,153 @@
 		<d-empty>Loading item...</d-empty>
 	{:else}
 		{@const item = displayItem}
-		<d-header>
-			<d-nav>
-				<button type="button" class="back-btn" onclick={goBack}> ← Back </button>
-				<d-view-controls>
-					<d-view-search id="comment-view-search" role="search" class:expanded={searchExpanded}>
-						<label class="visually-hidden" for="comment-search">Search comments</label>
-						<input
-							id="comment-search"
-							type="search"
-							placeholder="Search comments"
-							value={searchInput}
-							oninput={(e) => scheduleSearchUpdate(e.currentTarget.value)}
-						/>
-					</d-view-search>
-					<d-view-toolbar role="group" aria-label="Comment view">
+		<s-navigation-sentinel bind:this={navigationSentinel}></s-navigation-sentinel>
+		<d-nav
+			class:sticky={navigationVisible}
+			class:compact={navigationVisible && navigationHeaderCompact}
+		>
+			<button type="button" class="back-btn" onclick={goBack}> ← Back </button>
+			<d-view-controls>
+				<d-highlight-navigation
+					aria-label="Navigate highlighted comments"
+					class:inline-search={searchExpanded && !highlightLaneAvailable}
+				>
+					{#if searchExpanded && !highlightLaneAvailable}
+						{@render searchNavigator()}
+					{:else}
 						<button
 							type="button"
-							class="view-toolbar-btn secondary"
-							class:active={ungroupAllActive}
-							aria-pressed={ungroupAllActive}
-							disabled={allLActive}
-							title="Show every comment (no grouped strips)"
-							onclick={async (e) => {
-								const anchor = e.currentTarget as HTMLElement;
-								const rectBefore = anchor.getBoundingClientRect();
-								const snap = snapshotLayout();
-								onUngroupAll();
-								await animateLayoutChange(snap, anchor, rectBefore);
-							}}
-						>
-							Ungroup
-						</button>
-						<button
-							type="button"
-							class="view-toolbar-btn secondary"
-							class:active={allLActive}
-							aria-pressed={allLActive}
-							title="Expand all comments to full detail"
-							onclick={async (e) => {
-								const anchor = e.currentTarget as HTMLElement;
-								const rectBefore = anchor.getBoundingClientRect();
-								const snap = snapshotLayout();
-								onExpandAll();
-								await animateLayoutChange(snap, anchor, rectBefore);
-							}}
-						>
-							Expand
-						</button>
-						<button
-							type="button"
-							class="view-toolbar-btn secondary"
-							title="Restore the default comment view and clear promotions"
-							onclick={async (e) => {
-								const anchor = e.currentTarget as HTMLElement;
-								const rectBefore = anchor.getBoundingClientRect();
-								const snap = snapshotLayout();
-								onResetView();
-								await animateLayoutChange(snap, anchor, rectBefore);
-							}}
-						>
-							Reset
-						</button>
-						<button
-							type="button"
-							class="view-toolbar-btn view-toggle-btn secondary"
-							class:active={searchExpanded || !!activeSearchQuery || authorPromotions.size > 0}
-							aria-label="View options"
+							class="search-disclosure-btn"
+							class:active={searchExpanded || !!activeSearchQuery}
+							aria-label={searchExpanded ? 'Close search' : 'Search comments'}
 							aria-expanded={searchExpanded}
 							aria-controls="comment-view-search"
-							title="View options"
-							onclick={() => (searchExpanded = !searchExpanded)}
+							onclick={toggleSearch}
 						>
-							<svg class="tune-icon" viewBox="0 0 24 24" aria-hidden="true">
-								<path d="M4 7h10M18 7h2M4 17h2M10 17h10M14 4v6M6 14v6" />
-							</svg>
+							<svg viewBox="0 0 16 16" aria-hidden="true"
+								><circle cx="7" cy="7" r="4.5" /><path d="m10.5 10.5 3 3" /></svg
+							>
 						</button>
-					</d-view-toolbar>
-				</d-view-controls>
-			</d-nav>
-
+					{/if}
+					{#if highlightLaneAvailable}
+						<d-highlight-cluster>
+							<d-highlight-pills role="group" aria-label="Highlight navigation sources">
+								{#if newCommentCount > 0}
+									<button
+										type="button"
+										class="scope-pill new-scope"
+										style:--scope-color="#ff6600"
+										class:active={selectedHighlightSources.has('new')}
+										aria-pressed={selectedHighlightSources.has('new')}
+										onclick={() => toggleHighlightSource('new')}>NEW {newCommentCount}</button
+									>
+								{/if}
+								{#each [...authorPromotions.keys()].sort( (a, b) => a.localeCompare(b) ) as username (username)}
+									<button
+										type="button"
+										class="scope-pill author-scope"
+										style:--scope-color={authorColor(username)}
+										class:active={selectedHighlightSources.has(`author:${username}`)}
+										aria-pressed={selectedHighlightSources.has(`author:${username}`)}
+										onclick={() => toggleHighlightSource(`author:${username}`)}>{username}</button
+									>
+								{/each}
+							</d-highlight-pills>
+							<d-highlight-controls class:inactive={selectedHighlightSources.size === 0}>
+								<s-navigation-status aria-live="polite"
+									>{highlightNavigationTargets.length === 0 || activeHighlightNavigationIndex < 0
+										? '0 / 0'
+										: `${activeHighlightNavigationIndex + 1} / ${highlightNavigationTargets.length}`}</s-navigation-status
+								>
+								<button
+									type="button"
+									class="navigator-btn"
+									disabled={highlightNavigationTargets.length === 0}
+									aria-label="Previous highlighted comment"
+									onclick={() =>
+										moveNavigation(
+											highlightNavigationTargets,
+											activeHighlightNavigationIndex,
+											-1,
+											(key) => (activeHighlightNavigationKey = key)
+										)}
+									><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3 10 5-5 5 5" /></svg
+									></button
+								>
+								<button
+									type="button"
+									class="navigator-btn"
+									disabled={highlightNavigationTargets.length === 0}
+									aria-label="Next highlighted comment"
+									onclick={() =>
+										moveNavigation(
+											highlightNavigationTargets,
+											activeHighlightNavigationIndex,
+											1,
+											(key) => (activeHighlightNavigationKey = key)
+										)}
+									><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3 6 5 5 5-5" /></svg
+									></button
+								>
+							</d-highlight-controls>
+						</d-highlight-cluster>
+					{/if}
+				</d-highlight-navigation>
+				{#if searchExpanded && highlightLaneAvailable}
+					{@render searchNavigator()}
+				{/if}
+				<d-view-toolbar role="group" aria-label="Comment view">
+					<button
+						type="button"
+						class="view-toolbar-btn secondary"
+						class:active={ungroupAllActive}
+						aria-pressed={ungroupAllActive}
+						disabled={allLActive}
+						title="Show every comment (no grouped strips)"
+						onclick={async (e) => {
+							const anchor = e.currentTarget as HTMLElement;
+							const rectBefore = anchor.getBoundingClientRect();
+							const snap = snapshotLayout();
+							onUngroupAll();
+							await animateLayoutChange(snap, anchor, rectBefore);
+						}}
+					>
+						Ungroup
+					</button>
+					<button
+						type="button"
+						class="view-toolbar-btn secondary"
+						class:active={allLActive}
+						aria-pressed={allLActive}
+						title="Expand all comments to full detail"
+						onclick={async (e) => {
+							const anchor = e.currentTarget as HTMLElement;
+							const rectBefore = anchor.getBoundingClientRect();
+							const snap = snapshotLayout();
+							onExpandAll();
+							await animateLayoutChange(snap, anchor, rectBefore);
+						}}
+					>
+						Expand
+					</button>
+					<button
+						type="button"
+						class="view-toolbar-btn secondary"
+						title="Restore the default comment view and clear promotions"
+						onclick={async (e) => {
+							const anchor = e.currentTarget as HTMLElement;
+							const rectBefore = anchor.getBoundingClientRect();
+							const snap = snapshotLayout();
+							onResetView();
+							await animateLayoutChange(snap, anchor, rectBefore);
+						}}
+					>
+						Reset
+					</button>
+				</d-view-toolbar>
+			</d-view-controls>
+		</d-nav>
+		<d-header>
 			<d-item-header>
 				{#if item.title}
 					<d-title>
@@ -2130,12 +2617,48 @@
 	}
 
 	d-nav {
+		--navigation-control-height: 2.125rem;
+
 		display: grid;
-		grid-template-columns: auto minmax(8rem, 1fr) auto;
+		grid-template-columns: auto auto minmax(0, 1fr);
 		align-items: start;
-		gap: var(--size-2);
 		padding: var(--size-2);
+		background: light-dark(#fafaf8, #202020);
 		border-bottom: 1px solid light-dark(#e6e6df, #3a3a3a);
+
+		&.sticky {
+			position: sticky;
+			top: env(safe-area-inset-top, 0);
+			z-index: 20;
+		}
+
+		&.compact {
+			grid-template-columns: minmax(0, 1fr);
+			padding-block: var(--size-1);
+			box-shadow: 0 2px 8px light-dark(rgb(0 0 0 / 0.08), rgb(0 0 0 / 0.3));
+
+			.back-btn,
+			d-view-toolbar {
+				display: none;
+			}
+
+			d-highlight-navigation,
+			d-view-search {
+				grid-column: 1;
+			}
+
+			d-highlight-pills {
+				flex-wrap: nowrap;
+				overflow-x: auto;
+			}
+		}
+		gap: var(--size-2);
+	}
+
+	s-navigation-sentinel {
+		display: block;
+		height: 1px;
+		margin-bottom: -1px;
 	}
 
 	.back-btn {
@@ -2160,7 +2683,8 @@
 	}
 
 	d-view-toolbar {
-		grid-column: 3;
+		grid-column: 2;
+		grid-row: 1;
 		justify-self: end;
 		margin-bottom: 0;
 	}
@@ -2199,38 +2723,250 @@
 		}
 	}
 
-	.tune-icon {
-		display: block;
-		width: 1em;
-		height: 1em;
-		fill: none;
-		stroke: currentColor;
-		stroke-width: 2;
-		stroke-linecap: round;
-	}
-
-	.view-toggle-btn {
-		display: none;
-	}
-
-	/* Tune is absent at wider widths, so Reset is the visible end of the group. */
-	.view-toolbar-btn:nth-last-child(2) {
-		border-start-end-radius: var(--nc-radius);
-		border-end-end-radius: var(--nc-radius);
-	}
-
 	d-view-search {
 		display: block;
-		grid-column: 2;
+		grid-column: 1 / -1;
+		grid-row: 2;
 		width: 100%;
 		box-sizing: border-box;
 
+		d-search-input {
+			display: flex;
+			align-items: center;
+			overflow: hidden;
+			height: var(--navigation-control-height);
+			background: light-dark(#fff, #252525);
+			border: 1px solid light-dark(#ccc, #555);
+			border-radius: var(--nc-radius);
+
+			&:focus-within {
+				border-color: light-dark(#777, #999);
+				box-shadow: 0 0 0 1px light-dark(#777, #999);
+			}
+
+			> s-navigation-status {
+				padding-inline-start: 0;
+
+				&::before {
+					display: none;
+				}
+			}
+		}
+
 		input {
+			min-width: 0;
+			flex: 1;
 			min-height: 0;
-			height: calc(1.5em + 2 * var(--size-1) + 2px);
-			padding-block: var(--size-1);
-			font-size: var(--font-size-1);
+			height: 100%;
+			padding: 0 var(--size-2);
+			padding-inline-end: 0;
+			font-size: var(--font-size-0);
 			margin-bottom: 0;
+			color: inherit;
+			background: transparent;
+			border: 0;
+			border-radius: 0;
+			box-shadow: none;
+
+			&:focus {
+				outline: 0;
+				box-shadow: none;
+			}
+		}
+	}
+
+	d-highlight-navigation {
+		display: flex;
+		align-items: center;
+		justify-content: flex-start;
+		grid-column: 3;
+		grid-row: 1;
+		min-width: 0;
+		min-height: var(--navigation-control-height);
+		gap: var(--size-1);
+
+		&.inline-search d-view-search {
+			flex: 1 1 auto;
+			min-width: 0;
+			width: auto;
+		}
+	}
+
+	d-highlight-cluster {
+		display: flex;
+		align-self: center;
+		height: var(--navigation-control-height);
+		box-sizing: border-box;
+		min-width: 0;
+		overflow: hidden;
+		margin-inline-start: auto;
+		background: light-dark(#fff, #252525);
+		border: 0;
+		border-radius: var(--nc-radius);
+		box-shadow: inset 0 0 0 1px light-dark(#ccc, #555);
+	}
+
+	d-highlight-pills {
+		display: flex;
+		align-items: center;
+		align-self: stretch;
+		gap: var(--size-1);
+		flex: 0 1 auto;
+		flex-wrap: nowrap;
+		min-width: 0;
+		overflow-x: auto;
+		padding: 0 0.25rem;
+		margin-bottom: 0;
+		scrollbar-width: none;
+
+		&::-webkit-scrollbar {
+			display: none;
+		}
+	}
+
+	.search-disclosure-btn {
+		display: inline-grid;
+		place-items: center;
+		align-self: center;
+		box-sizing: border-box;
+		flex: 0 0 var(--navigation-control-height);
+		width: var(--navigation-control-height);
+		height: var(--navigation-control-height);
+		min-width: var(--navigation-control-height);
+		min-height: var(--navigation-control-height);
+		padding: 0.25rem;
+		margin: 0;
+		color: light-dark(#666, #aaa);
+		background: transparent;
+		border: 1px solid light-dark(#ccc, #555);
+		border-radius: var(--nc-radius);
+
+		&:hover,
+		&.active {
+			color: light-dark(#222, #eee);
+			background: light-dark(#eee, #383838);
+		}
+
+		svg {
+			width: 1rem;
+			height: 1rem;
+			fill: none;
+			stroke: currentColor;
+			stroke-width: 1.5;
+			stroke-linecap: round;
+		}
+	}
+
+	s-navigation-status {
+		display: inline-flex;
+		position: relative;
+		align-items: center;
+		align-self: stretch;
+		justify-content: center;
+		min-width: max-content;
+		flex: none;
+		padding-inline: var(--size-2);
+		font-size: var(--font-size-0);
+		font-variant-numeric: tabular-nums;
+		color: light-dark(#555, #bbb);
+		background: transparent;
+
+		&::before {
+			content: '';
+			position: absolute;
+			inset-block: 25%;
+			inset-inline-start: 0;
+			width: 1px;
+			background: light-dark(#ddd, #444);
+		}
+	}
+
+	d-highlight-controls {
+		display: flex;
+		align-self: stretch;
+		flex: none;
+		overflow: hidden;
+
+		> s-navigation-status {
+			background: transparent;
+
+			&::before {
+				display: none;
+			}
+		}
+
+		&.inactive > s-navigation-status {
+			opacity: 0.55;
+		}
+	}
+
+	.navigator-btn {
+		display: inline-grid;
+		position: relative;
+		place-items: center;
+		align-self: stretch;
+		min-width: 1.75rem;
+		flex: none;
+		padding: 0.25rem;
+		margin: 0;
+		color: light-dark(#666, #aaa);
+		background: transparent;
+		border: 0;
+		border-radius: 0;
+
+		&::before {
+			content: '';
+			position: absolute;
+			inset-block: 25%;
+			inset-inline-start: 0;
+			width: 1px;
+			background: light-dark(#ddd, #444);
+		}
+
+		&:hover:not(:disabled) {
+			color: light-dark(#222, #eee);
+			background: light-dark(#eee, #383838);
+		}
+
+		&:disabled {
+			opacity: 0.35;
+		}
+
+		svg {
+			width: 0.9rem;
+			height: 0.9rem;
+			fill: none;
+			stroke: currentColor;
+			stroke-width: 1.75;
+			stroke-linecap: round;
+			stroke-linejoin: round;
+		}
+	}
+
+	d-highlight-pills {
+		.scope-pill {
+			box-sizing: border-box;
+			height: 1.5rem;
+			padding: 0 0.32rem;
+			margin: 0;
+			font-size: var(--font-size-0);
+			font-weight: var(--font-weight-5);
+			line-height: 1.2;
+			color: var(--scope-color);
+			background: transparent;
+			border: 1px solid var(--scope-color);
+			border-radius: 999px;
+
+			&:hover {
+				color: light-dark(#fff, #111);
+				background: var(--scope-color);
+			}
+
+			&.active {
+				color: light-dark(#fff, #111);
+				background: var(--scope-color);
+				box-shadow: inset 0 1px 2px rgb(0 0 0 / 0.22);
+			}
 		}
 	}
 
@@ -2243,24 +2979,23 @@
 			grid-column: 2;
 		}
 
+		d-highlight-navigation,
 		d-view-search {
 			grid-column: 1 / -1;
+		}
+
+		d-highlight-navigation {
 			grid-row: 2;
+		}
+
+		d-view-search {
+			grid-row: 3;
 		}
 	}
 
 	@media (max-width: 400px) {
-		.view-toggle-btn {
-			display: inline-block;
-		}
-
-		.view-toolbar-btn:nth-last-child(2) {
-			border-start-end-radius: 0;
-			border-end-end-radius: 0;
-		}
-
-		d-view-search:not(.expanded) {
-			display: none;
+		d-view-search input {
+			min-width: 5rem;
 		}
 	}
 
@@ -2680,6 +3415,12 @@
 			background: light-dark(rgba(74, 158, 218, 0.12), rgba(74, 158, 218, 0.15));
 		}
 
+		&.navigation-target-active {
+			outline: 2px solid light-dark(#2f78b7, #75bfff);
+			outline-offset: -2px;
+			scroll-margin-top: 7rem;
+		}
+
 		> d-comment-meta {
 			grid-area: meta;
 		}
@@ -2826,6 +3567,13 @@
 			background: light-dark(#ffe08a, #755b00);
 			border-radius: 2px;
 			box-decoration-break: clone;
+			scroll-margin-top: 6rem;
+
+			&.active-search-match {
+				outline: 2px solid light-dark(#d16b00, #ffb347);
+				outline-offset: 1px;
+				background: light-dark(#ffc44d, #9a7000);
+			}
 		}
 
 		p {
