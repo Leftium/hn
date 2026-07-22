@@ -3,11 +3,11 @@
 	import { domainify, fetchHNItemTree } from '$lib/fetch-hn-item';
 	import { fetchHnpwaItem } from '$lib/fetch-hnpwa';
 	import {
-		getItemView,
-		recordItemView,
+		beginItemView,
 		countNewComments,
 		countVisibleComments,
-		isHiddenComment
+		isHiddenComment,
+		type ItemViewCheckpoint
 	} from '$lib/item-view-history';
 	import { browser } from '$app/environment';
 	import { replaceState } from '$app/navigation';
@@ -39,6 +39,8 @@
 		'light-dark(#7048a8, #bd9aee)',
 		'light-dark(#087b83, #65d2da)'
 	];
+	const COMMENT_WINDOW_SECONDS = 14 * 24 * 60 * 60;
+	const ACTIVITY_BUCKET_COUNT = 32;
 
 	type LOD = 'L' | 'M' | 'S';
 	type AuthorPromotion = 'M' | 'L';
@@ -629,10 +631,26 @@
 	let highlightSelectionInitializedForItem = $state<number | null>(null);
 	let newCommentTrackingInitializedForItem = $state<number | null>(null);
 	let searchDisclosureInitializedForItem = $state<number | null>(null);
+	let filterExpanded = $state(false);
 	let navigationHeaderCompact = $state(false);
 	let navigationSentinel = $state<HTMLElement>();
 	let searchDebounce: ReturnType<typeof setTimeout> | undefined;
-	let newCommentThreshold = $state<number | null>(null);
+	let automaticNewCommentThreshold = $state<number | null>(null);
+	let adjustedNewCommentThreshold = $state<number | null>(null);
+	let itemViewCheckpoints = $state<ItemViewCheckpoint[]>([]);
+	let timelineNow = $state(Math.floor(Date.now() / 1000));
+	const timelineStart = $derived(displayItem?.time ?? 0);
+	const timelineEnd = $derived(
+		displayItem ? Math.min(timelineNow, displayItem.time + COMMENT_WINDOW_SECONDS) : 0
+	);
+	const clampedAdjustedNewCommentThreshold = $derived(
+		adjustedNewCommentThreshold === null || !displayItem
+			? null
+			: Math.max(timelineStart, Math.min(timelineEnd, adjustedNewCommentThreshold))
+	);
+	const newCommentThreshold = $derived(
+		clampedAdjustedNewCommentThreshold ?? automaticNewCommentThreshold
+	);
 	const newCommentCount = $derived(
 		displayItem && newCommentThreshold !== null
 			? countNewComments(displayItem.comments, newCommentThreshold)
@@ -693,6 +711,48 @@
 
 		return { parentOf, childrenOf, levelOf, promotedRoleOf, commentById, allIds, positionOf };
 	});
+	const activityBuckets = $derived.by(() => {
+		const counts = Array<number>(ACTIVITY_BUCKET_COUNT).fill(0);
+		const duration = timelineEnd - timelineStart;
+		if (duration <= 0) return counts.map((count) => ({ count, height: 0 }));
+		for (const id of treeIndex.allIds) {
+			const comment = treeIndex.commentById.get(id);
+			if (!comment || comment.promotedRole) continue;
+			const time = comment.time;
+			const progress = Math.max(0, Math.min(1, (time - timelineStart) / duration));
+			const index = Math.min(
+				ACTIVITY_BUCKET_COUNT - 1,
+				Math.floor(progress * ACTIVITY_BUCKET_COUNT)
+			);
+			counts[index] += 1;
+		}
+		const maximum = Math.max(0, ...counts);
+		return counts.map((count) => ({ count, height: maximum > 0 ? count / maximum : 0 }));
+	});
+	const timelineValue = $derived(newCommentThreshold ?? timelineEnd);
+	const timelineProgress = $derived(
+		timelineEnd > timelineStart
+			? Math.max(0, Math.min(1, (timelineValue - timelineStart) / (timelineEnd - timelineStart)))
+			: 1
+	);
+	const timelineStops = $derived.by(() => {
+		const stops = new SvelteMap<number, ItemViewCheckpoint | null>();
+		if (timelineStart <= 0 || timelineEnd < timelineStart) return [];
+		stops.set(timelineStart, null);
+		for (const checkpoint of itemViewCheckpoints) {
+			if (checkpoint.viewedAt >= timelineStart && checkpoint.viewedAt <= timelineEnd) {
+				stops.set(checkpoint.viewedAt, checkpoint);
+			}
+		}
+		stops.set(timelineEnd, null);
+		return [...stops.entries()]
+			.map(([time, checkpoint]) => ({ time, checkpoint }))
+			.sort((a, b) => a.time - b.time);
+	});
+	const previousTimelineStop = $derived(
+		[...timelineStops].reverse().find((stop) => stop.time < timelineValue)
+	);
+	const nextTimelineStop = $derived(timelineStops.find((stop) => stop.time > timelineValue));
 
 	const activeSearchTerms = $derived(parseSearchTerms(activeSearchQuery));
 	const searchPlanByComment = $derived.by(() => {
@@ -770,7 +830,7 @@
 	);
 	const highlightLaneAvailable = $derived(newCommentCount > 0 || authorPromotions.size > 0);
 	const navigationVisible = $derived(
-		highlightLaneAvailable || searchExpanded || !!activeSearchQuery
+		highlightLaneAvailable || searchExpanded || !!activeSearchQuery || filterExpanded
 	);
 
 	$effect(() => {
@@ -1300,6 +1360,34 @@
 	function toggleSearch(): void {
 		if (searchExpanded) closeSearch();
 		else void discloseSearch();
+	}
+
+	function toggleFilter(): void {
+		filterExpanded = !filterExpanded;
+	}
+
+	function setAdjustedNewThreshold(value: number): void {
+		if (!Number.isFinite(value) || timelineEnd < timelineStart) return;
+		adjustedNewCommentThreshold = Math.max(timelineStart, Math.min(timelineEnd, Math.floor(value)));
+	}
+
+	function formatElapsedSincePost(time: number): string {
+		if (time >= timelineNow - 1) return 'Now';
+		const seconds = Math.max(0, time - timelineStart);
+		const days = Math.floor(seconds / 86400);
+		const hours = Math.floor((seconds % 86400) / 3600);
+		const minutes = Math.floor((seconds % 3600) / 60);
+		if (days > 0) return `${days}d${hours > 0 ? ` ${hours}h` : ''} after posting`;
+		if (hours > 0) return `${hours}h${minutes > 0 ? ` ${minutes}m` : ''} after posting`;
+		return `${minutes}m after posting`;
+	}
+
+	function formatLocalDatetime(time: number): string {
+		return dayjs(time * 1000).format('YYYY-MM-DD HH:mm');
+	}
+
+	function checkpointLabel(checkpoint: ItemViewCheckpoint): string {
+		return `${formatElapsedSincePost(checkpoint.viewedAt)}, ${formatLocalDatetime(checkpoint.viewedAt)}, ${checkpoint.commentCount} comments`;
 	}
 
 	function clearSearchOrClose(): void {
@@ -1849,18 +1937,13 @@
 		const run = ++hydrateRun;
 		const completed = new SvelteSet<number>();
 		const attempts = new SvelteMap<number, number>();
-		const previous = await getItemView(itemId);
+		const view = await beginItemView(itemId, visibleCommentCount);
 		if (run !== hydrateRun || !displayItem) return;
 
-		if (previous) {
-			newCommentThreshold = previous.viewedAt;
-		} else {
-			newCommentThreshold = null;
-		}
+		automaticNewCommentThreshold = view.automaticThreshold;
+		itemViewCheckpoints = view.visits;
 		newCommentTrackingInitializedForItem = itemId;
 		initializeNewHighlightSelection(itemId);
-
-		await recordItemView(itemId, visibleCommentCount);
 
 		for (const topLevelComment of displayItem.comments) {
 			while (run === hydrateRun && displayItem?.id === itemId) {
@@ -1893,7 +1976,6 @@
 				fullItem = nextFullItem;
 				if (!nextFullItem) break;
 				initializeNewHighlightSelection(itemId);
-				await recordItemView(itemId, countVisibleComments(nextFullItem.comments));
 				await tick();
 			}
 		}
@@ -1910,7 +1992,10 @@
 		item = null;
 		fullItem = null;
 		itemError = null;
-		newCommentThreshold = null;
+		automaticNewCommentThreshold = null;
+		adjustedNewCommentThreshold = null;
+		itemViewCheckpoints = [];
+		timelineNow = Math.floor(Date.now() / 1000);
 		selectedHighlightSources.clear();
 		activeHighlightNavigationKey = null;
 		previousHighlightNavigationTargets = [];
@@ -1918,6 +2003,7 @@
 		newCommentTrackingInitializedForItem = null;
 		searchDisclosureInitializedForItem = null;
 		searchExpanded = false;
+		filterExpanded = false;
 
 		const hnpwaRequest = fetchHnpwaItem(id, fetch);
 		const firebaseRequest = fetchHNItemTree(id, fetch, { maxDepth: 1 });
@@ -2458,7 +2544,7 @@
 {/snippet}
 
 {#snippet searchNavigator()}
-	<d-view-search id="comment-view-search" role="search">
+	<d-view-search id="comment-view-search" role="search" class:below-filter={filterExpanded}>
 		<label class="visually-hidden" for="comment-search">Search comments</label>
 		<d-search-input>
 			<input
@@ -2515,6 +2601,103 @@
 	</d-view-search>
 {/snippet}
 
+{#snippet newCommentTimeline(itemId: number)}
+	<d-new-timeline id="new-comment-timeline">
+		<d-timeline-summary>
+			<s-timeline-value>
+				{formatElapsedSincePost(timelineValue)}
+				<small>{formatLocalDatetime(timelineValue)}</small>
+			</s-timeline-value>
+			<s-timeline-actions role="group" aria-label="New comment cutoff checkpoints">
+				<button
+					type="button"
+					class="timeline-action-btn"
+					disabled={!previousTimelineStop}
+					aria-label="Previous cutoff checkpoint"
+					onclick={() => previousTimelineStop && setAdjustedNewThreshold(previousTimelineStop.time)}
+				>
+					<svg viewBox="0 0 16 16" aria-hidden="true"><path d="m10 3-5 5 5 5" /></svg>
+				</button>
+				<button
+					type="button"
+					class="timeline-action-btn"
+					disabled={!nextTimelineStop}
+					aria-label="Next cutoff checkpoint"
+					onclick={() => nextTimelineStop && setAdjustedNewThreshold(nextTimelineStop.time)}
+				>
+					<svg viewBox="0 0 16 16" aria-hidden="true"><path d="m6 3 5 5-5 5" /></svg>
+				</button>
+			</s-timeline-actions>
+		</d-timeline-summary>
+		<d-timeline-track>
+			<svg class="activity-plot" viewBox="0 0 100 24" preserveAspectRatio="none" aria-hidden="true">
+				<defs>
+					<clipPath id={`new-activity-clip-${itemId}`}>
+						<rect
+							x={timelineProgress * 100}
+							y="0"
+							width={(1 - timelineProgress) * 100}
+							height="24"
+						/>
+					</clipPath>
+				</defs>
+				<g class="activity-neutral">
+					{#each activityBuckets as bucket, index (index)}
+						<rect
+							x={(index * 100) / ACTIVITY_BUCKET_COUNT + 0.3}
+							y={23 - bucket.height * 20}
+							width={100 / ACTIVITY_BUCKET_COUNT - 0.6}
+							height={bucket.height * 20}
+							rx="0.3"
+						/>
+					{/each}
+				</g>
+				<g class="activity-new" clip-path={`url(#new-activity-clip-${itemId})`}>
+					{#each activityBuckets as bucket, index (index)}
+						<rect
+							x={(index * 100) / ACTIVITY_BUCKET_COUNT + 0.3}
+							y={23 - bucket.height * 20}
+							width={100 / ACTIVITY_BUCKET_COUNT - 0.6}
+							height={bucket.height * 20}
+							rx="0.3"
+						/>
+					{/each}
+				</g>
+			</svg>
+			<d-checkpoint-markers aria-label="Item view checkpoints">
+				{#each itemViewCheckpoints as checkpoint (`${checkpoint.viewedAt}:${checkpoint.commentCount}`)}
+					{#if checkpoint.viewedAt >= timelineStart && checkpoint.viewedAt <= timelineEnd}
+						<button
+							type="button"
+							class="checkpoint-marker"
+							class:selected={checkpoint.viewedAt === timelineValue}
+							style:left={`${((checkpoint.viewedAt - timelineStart) / Math.max(1, timelineEnd - timelineStart)) * 100}%`}
+							aria-label={checkpointLabel(checkpoint)}
+							title={checkpointLabel(checkpoint)}
+							onclick={() => setAdjustedNewThreshold(checkpoint.viewedAt)}
+						></button>
+					{/if}
+				{/each}
+			</d-checkpoint-markers>
+			<label class="visually-hidden" for={`new-comment-cutoff-${itemId}`}>New comment cutoff</label>
+			<input
+				id={`new-comment-cutoff-${itemId}`}
+				class="timeline-range"
+				type="range"
+				min={timelineStart}
+				max={timelineEnd}
+				step="1"
+				value={timelineValue}
+				aria-valuetext={`${formatElapsedSincePost(timelineValue)}, ${formatLocalDatetime(timelineValue)}; ${newCommentCount} comments new`}
+				oninput={(event) => setAdjustedNewThreshold(event.currentTarget.valueAsNumber)}
+			/>
+		</d-timeline-track>
+		<d-timeline-endpoints aria-hidden="true">
+			<span>Posted</span><span>{formatElapsedSincePost(timelineEnd)}</span>
+		</d-timeline-endpoints>
+	</d-new-timeline>
+{/snippet}
+
 <svelte:head>
 	<title>{displayItem?.title || 'HN Reader'}</title>
 </svelte:head>
@@ -2537,6 +2720,22 @@
 					aria-label="Navigate highlighted comments"
 					class:inline-search={searchExpanded && !highlightLaneAvailable}
 				>
+					<button
+						type="button"
+						class="filter-disclosure-btn"
+						class:active={filterExpanded}
+						aria-label={filterExpanded ? 'Close new comment cutoff' : 'Choose new comment cutoff'}
+						aria-expanded={filterExpanded}
+						aria-controls="new-comment-timeline"
+						onclick={toggleFilter}
+					>
+						<svg viewBox="0 0 16 16" aria-hidden="true">
+							<path d="M4 2v3m0 3v6M8 2v7m0 3v2M12 2v2m0 3v7" />
+							<circle cx="4" cy="6.5" r="1.5" />
+							<circle cx="8" cy="10.5" r="1.5" />
+							<circle cx="12" cy="5.5" r="1.5" />
+						</svg>
+					</button>
 					{#if searchExpanded && !highlightLaneAvailable}
 						{@render searchNavigator()}
 					{:else}
@@ -2624,6 +2823,9 @@
 				</d-highlight-navigation>
 				{#if searchExpanded && highlightLaneAvailable}
 					{@render searchNavigator()}
+				{/if}
+				{#if filterExpanded}
+					{@render newCommentTimeline(item.id)}
 				{/if}
 				<d-view-toolbar role="group" aria-label="Comment view">
 					<button
@@ -2803,7 +3005,8 @@
 			}
 
 			d-highlight-navigation,
-			d-view-search {
+			d-view-search,
+			d-new-timeline {
 				grid-column: 1;
 			}
 
@@ -2889,6 +3092,10 @@
 		grid-row: 2;
 		width: 100%;
 		box-sizing: border-box;
+
+		&.below-filter {
+			grid-row: 3;
+		}
 
 		d-search-input {
 			display: flex;
@@ -2984,7 +3191,7 @@
 		}
 	}
 
-	.search-disclosure-btn {
+	:is(.filter-disclosure-btn, .search-disclosure-btn) {
 		display: inline-grid;
 		place-items: center;
 		align-self: center;
@@ -3015,6 +3222,242 @@
 			stroke-width: 1.5;
 			stroke-linecap: round;
 		}
+	}
+
+	.filter-disclosure-btn svg {
+		stroke-linejoin: round;
+	}
+
+	d-new-timeline {
+		display: block;
+		grid-column: 1 / -1;
+		grid-row: 2;
+		min-width: 0;
+		padding: var(--size-2);
+		background: light-dark(#fff, #252525);
+		border: 1px solid light-dark(#ccc, #555);
+		border-radius: var(--nc-radius);
+	}
+
+	d-timeline-summary,
+	d-timeline-endpoints {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: var(--size-2);
+	}
+
+	s-timeline-value {
+		display: flex;
+		align-items: baseline;
+		gap: var(--size-2);
+		min-width: 0;
+		font-size: var(--font-size-0);
+		font-weight: var(--font-weight-6);
+		font-variant-numeric: tabular-nums;
+
+		small {
+			font-size: 0.72rem;
+			font-weight: var(--font-weight-4);
+			color: light-dark(#777, #aaa);
+		}
+	}
+
+	s-timeline-actions {
+		display: flex;
+		flex: none;
+		margin-bottom: 0;
+	}
+
+	.timeline-action-btn {
+		display: inline-grid;
+		place-items: center;
+		height: 1.65rem;
+		min-height: 0;
+		padding: 0;
+		margin: 0;
+		font-size: var(--font-size-0);
+		color: light-dark(#666, #aaa);
+		background: light-dark(#f5f5f5, #303030);
+		border: 1px solid light-dark(#ccc, #555);
+		border-radius: 0;
+
+		&:first-child {
+			border-radius: var(--nc-radius) 0 0 var(--nc-radius);
+		}
+
+		&:last-child {
+			border-radius: 0 var(--nc-radius) var(--nc-radius) 0;
+		}
+
+		& + & {
+			border-inline-start: 0;
+		}
+
+		&:hover:not(:disabled) {
+			color: light-dark(#222, #eee);
+			background: light-dark(#eee, #383838);
+		}
+
+		&:disabled {
+			opacity: 0.4;
+		}
+
+		svg {
+			width: 0.8rem;
+			height: 0.8rem;
+			fill: none;
+			stroke: currentColor;
+			stroke-width: 1.6;
+			stroke-linecap: round;
+			stroke-linejoin: round;
+		}
+	}
+
+	.timeline-action-btn {
+		width: 1.65rem;
+	}
+
+	d-timeline-track {
+		--timeline-thumb-size: 1rem;
+		--timeline-thumb-radius: calc(var(--timeline-thumb-size) / 2);
+
+		display: block;
+		position: relative;
+		height: 3rem;
+		margin-top: var(--size-1);
+	}
+
+	.activity-plot {
+		display: block;
+		position: absolute;
+		inset: 0 var(--timeline-thumb-radius) 0.55rem;
+		width: calc(100% - var(--timeline-thumb-size));
+		height: calc(100% - 0.55rem);
+		overflow: visible;
+
+		.activity-neutral {
+			fill: light-dark(#c8c8c1, #555);
+		}
+
+		.activity-new {
+			fill: #ff6600;
+		}
+	}
+
+	d-checkpoint-markers {
+		display: block;
+		position: absolute;
+		inset: auto var(--timeline-thumb-radius) 0;
+		height: 1rem;
+		pointer-events: none;
+	}
+
+	.checkpoint-marker {
+		position: absolute;
+		width: 1rem;
+		height: 1rem;
+		min-width: 0;
+		min-height: 0;
+		padding: 0;
+		margin: 0;
+		translate: -50% 0;
+		z-index: 2;
+		pointer-events: auto;
+		background: transparent;
+		border: 0;
+		border-radius: 0;
+
+		&::after {
+			content: '';
+			position: absolute;
+			inset: 50% 50% auto auto;
+			width: 0.42rem;
+			height: 0.42rem;
+			translate: 50% -50%;
+			rotate: 45deg;
+			background: light-dark(#52718a, #9db9cc);
+			border: 1px solid light-dark(#fff, #252525);
+			border-radius: 1px;
+			box-shadow: 0 0 0 1px light-dark(#52718a, #9db9cc);
+		}
+
+		&:hover,
+		&:focus-visible,
+		&.selected {
+			outline: 0;
+
+			&::after {
+				background: #ff6600;
+				box-shadow: 0 0 0 1px #ff6600;
+			}
+		}
+	}
+
+	.timeline-range {
+		appearance: none;
+		position: absolute;
+		inset: auto 0 0;
+		z-index: 1;
+		width: 100%;
+		height: 1rem;
+		padding: 0;
+		margin: 0;
+		background: transparent;
+		cursor: pointer;
+
+		&::-webkit-slider-runnable-track {
+			height: 2px;
+			background: light-dark(#a9aaa5, #73736f);
+			border: 0;
+			border-radius: 999px;
+		}
+
+		&::-moz-range-track,
+		&::-moz-range-progress {
+			height: 2px;
+			background: light-dark(#a9aaa5, #73736f);
+			border: 0;
+			border-radius: 999px;
+		}
+
+		&::-webkit-slider-thumb {
+			appearance: none;
+			width: var(--timeline-thumb-size);
+			height: var(--timeline-thumb-size);
+			margin-top: calc((2px - var(--timeline-thumb-size)) / 2);
+			background: light-dark(#fff, #252525);
+			border: 3px solid #ff6600;
+			border-radius: 50%;
+			box-shadow: 0 1px 2px rgb(0 0 0 / 0.2);
+		}
+
+		&::-moz-range-thumb {
+			width: var(--timeline-thumb-size);
+			height: var(--timeline-thumb-size);
+			box-sizing: border-box;
+			background: light-dark(#fff, #252525);
+			border: 3px solid #ff6600;
+			border-radius: 50%;
+			box-shadow: 0 1px 2px rgb(0 0 0 / 0.2);
+		}
+
+		&:focus-visible {
+			outline: 0;
+
+			&::-webkit-slider-thumb {
+				box-shadow: 0 0 0 3px light-dark(rgb(255 102 0 / 0.22), rgb(255 140 64 / 0.3));
+			}
+
+			&::-moz-range-thumb {
+				box-shadow: 0 0 0 3px light-dark(rgb(255 102 0 / 0.22), rgb(255 140 64 / 0.3));
+			}
+		}
+	}
+
+	d-timeline-endpoints {
+		font-size: 0.7rem;
+		color: light-dark(#777, #aaa);
 	}
 
 	s-navigation-status {
@@ -3139,7 +3582,8 @@
 		}
 
 		d-highlight-navigation,
-		d-view-search {
+		d-view-search,
+		d-new-timeline {
 			grid-column: 1 / -1;
 		}
 
@@ -3147,14 +3591,26 @@
 			grid-row: 2;
 		}
 
+		d-new-timeline {
+			grid-row: 3;
+		}
+
 		d-view-search {
 			grid-row: 3;
+
+			&.below-filter {
+				grid-row: 4;
+			}
 		}
 	}
 
 	@media (max-width: 400px) {
 		d-view-search input {
 			min-width: 5rem;
+		}
+
+		s-timeline-value small {
+			display: none;
 		}
 	}
 
