@@ -2172,10 +2172,6 @@
 		> button {
 			border: 0;
 		}
-
-		> button + button::before {
-			background: light-dark(rgb(0 0 0 / 0.18), rgb(255 255 255 / 0.22));
-		}
 	}
 
 	:is(.view-toolbar-btn, .author-promotion-btn, .lod-row-btn) {

@@ -1,4 +1,6 @@
 allowBuilds:
   esbuild: true
+minimumReleaseAgeExclude:
+  - '@leftium/nimble.css@0.20.0'
 onlyBuiltDependencies:
   - esbuild
