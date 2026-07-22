@@ -373,6 +373,89 @@
 		commentId: number;
 		selector: string;
 	}
+	type NavigationAnchorOrigin = 'selection' | 'search' | 'highlight';
+
+	interface NavigationResolutionOptions {
+		targets: NavigationTarget[];
+		activeIndex: number;
+		direction: 1 | -1;
+		origin: Exclude<NavigationAnchorOrigin, 'selection'>;
+		anchorCommentId: number | null;
+		anchorOrigin: NavigationAnchorOrigin;
+		skipConsecutiveComments: boolean;
+		commentPosition: (commentId: number) => number | undefined;
+	}
+
+	function resolveNavigationIndex({
+		targets,
+		activeIndex,
+		direction,
+		origin,
+		anchorCommentId,
+		anchorOrigin,
+		skipConsecutiveComments,
+		commentPosition
+	}: NavigationResolutionOptions): number {
+		const activeTarget = activeIndex >= 0 ? targets[activeIndex] : undefined;
+		const anchorPosition = anchorCommentId === null ? undefined : commentPosition(anchorCommentId);
+		const anchorTargetIndex =
+			anchorPosition === undefined
+				? -1
+				: targets.findIndex((target) => target.commentId === anchorCommentId);
+		const continueExactOccurrence =
+			origin === 'search' &&
+			!!activeTarget &&
+			(anchorCommentId === null ||
+				(anchorOrigin === 'search' && activeTarget.commentId === anchorCommentId));
+
+		if (continueExactOccurrence) {
+			return (activeIndex + direction + targets.length) % targets.length;
+		}
+
+		const boundaryPosition = direction === 1 ? -1 : Number.POSITIVE_INFINITY;
+		const currentPosition =
+			anchorPosition ??
+			(activeTarget
+				? (commentPosition(activeTarget.commentId) ?? boundaryPosition)
+				: boundaryPosition);
+		const runStartIndex =
+			anchorTargetIndex >= 0 ? anchorTargetIndex : anchorPosition === undefined ? activeIndex : -1;
+
+		if (skipConsecutiveComments && runStartIndex >= 0) {
+			let edgeIndex = runStartIndex;
+			while (true) {
+				const candidateIndex = edgeIndex + direction;
+				if (candidateIndex < 0 || candidateIndex >= targets.length) break;
+				const candidatePosition = commentPosition(targets[candidateIndex].commentId);
+				const edgePosition = commentPosition(targets[edgeIndex].commentId);
+				if (
+					candidatePosition === undefined ||
+					edgePosition === undefined ||
+					Math.abs(candidatePosition - edgePosition) !== 1
+				) {
+					break;
+				}
+				edgeIndex = candidateIndex;
+			}
+			return (edgeIndex + direction + targets.length) % targets.length;
+		}
+
+		if (direction === 1) {
+			const nextIndex = targets.findIndex(
+				(target) => (commentPosition(target.commentId) ?? -1) > currentPosition
+			);
+			return nextIndex >= 0 ? nextIndex : 0;
+		}
+
+		for (let index = targets.length - 1; index >= 0; index -= 1) {
+			if (
+				(commentPosition(targets[index].commentId) ?? Number.POSITIVE_INFINITY) < currentPosition
+			) {
+				return index;
+			}
+		}
+		return targets.length - 1;
+	}
 
 	function parseSearchTerms(value: string): SearchTerm[] {
 		const terms: SearchTerm[] = [];
@@ -572,6 +655,7 @@
 		promotedRoleOf: SvelteMap<number, PromotedRole>;
 		commentById: SvelteMap<number, RenderHNItem>;
 		allIds: number[]; // every visible comment id in depth-first pre-order (excludes post)
+		positionOf: SvelteMap<number, number>; // comment id → index in allIds
 	}
 
 	const treeIndex = $derived.by<TreeIndex>(() => {
@@ -581,6 +665,7 @@
 		const promotedRoleOf = new SvelteMap<number, PromotedRole>();
 		const commentById = new SvelteMap<number, RenderHNItem>();
 		const allIds: number[] = [];
+		const positionOf = new SvelteMap<number, number>();
 
 		function walk(comments: RenderHNItem[], parentId: number, level: number) {
 			const visible = comments.filter((c) => !isHiddenComment(c));
@@ -593,13 +678,14 @@
 				parentOf.set(c.id, parentId);
 				levelOf.set(c.id, level);
 				if (c.promotedRole) promotedRoleOf.set(c.id, c.promotedRole);
+				positionOf.set(c.id, allIds.length);
 				allIds.push(c.id);
 				if (c.comments.length > 0) walk(c.comments, c.id, level + 1);
 			}
 		}
 		if (displayTree) walk(displayTree.comments, displayTree.id, 1);
 
-		return { parentOf, childrenOf, levelOf, promotedRoleOf, commentById, allIds };
+		return { parentOf, childrenOf, levelOf, promotedRoleOf, commentById, allIds, positionOf };
 	});
 
 	const activeSearchTerms = $derived(parseSearchTerms(activeSearchQuery));
@@ -811,16 +897,21 @@
 	// click. Cleared + refilled on each qualifying action, so at any time it
 	// reflects the "last place the user touched". Useful after layout shift
 	// from toggling a strip — the N new M rows stay highlighted until the
-	// next click, making them easy to re-locate.
+	// next selection or navigation, making them easy to re-locate.
 	//
-	// Only production click actions (row click L↔M, strip click → M) write
-	// here. Dev UI (?dev=1) intentionally does not highlight; it's a debug
-	// affordance, not production UX.
+	// Production row/strip clicks and successful navigation write here. The
+	// blue highlight is also the shared reading anchor used by both navigators.
+	// Dev UI (?dev=1) intentionally does not highlight; it's a debug affordance,
+	// not production UX.
 	const highlightedIds = new SvelteSet<number>();
+	let navigationAnchorCommentId = $state<number | null>(null);
+	let navigationAnchorOrigin = $state<NavigationAnchorOrigin>('selection');
 
-	function setHighlight(ids: Iterable<number>): void {
+	function setHighlight(ids: Iterable<number>, anchorId: number): void {
 		highlightedIds.clear();
 		for (const id of ids) highlightedIds.add(id);
+		navigationAnchorCommentId = anchorId;
+		navigationAnchorOrigin = 'selection';
 	}
 
 	// --- Layout animation (Phase 4.5) ---
@@ -1060,7 +1151,7 @@
 		if (lod === 'L') setLOD([id], 'M');
 		else if (lod === 'M') setLOD([id], 'L');
 		else return; // lod === 'S' on an L/M-styled row shouldn't occur
-		setHighlight([id]);
+		setHighlight([id], id);
 	}
 
 	// Strip click-to-expand: clicking any segment promotes ALL strip members
@@ -1069,11 +1160,11 @@
 	// matches the production rule of never toggling down to S. All new M
 	// rows are highlighted so the user can re-locate the expanded region
 	// after the strip-to-rows layout shift.
-	function onStripSegClick(e: MouseEvent, segmentIds: number[]): void {
+	function onStripSegClick(e: MouseEvent, segmentIds: number[], clickedId: number): void {
 		const t = e.target as HTMLElement | null;
 		if (t?.closest('a, [contenteditable]')) return;
 		setLOD(segmentIds, 'M');
-		setHighlight(segmentIds);
+		setHighlight(segmentIds, clickedId);
 	}
 
 	function authorColor(username: string): string {
@@ -1113,6 +1204,7 @@
 		cancelPendingSearchUpdate();
 		const urlQuery = url.searchParams.get('q') ?? '';
 		searchInput = urlQuery;
+		if (navigationAnchorOrigin === 'search') navigationAnchorOrigin = 'selection';
 		activeSearchQuery = normalizeSearchQuery(urlQuery);
 		authorPromotions.clear();
 		for (const [username, level] of readAuthorPromotions(url.searchParams)) {
@@ -1136,12 +1228,14 @@
 		searchInput = value;
 		cancelPendingSearchUpdate();
 		if (value === '') {
+			if (navigationAnchorOrigin === 'search') navigationAnchorOrigin = 'selection';
 			activeSearchQuery = '';
 			activeSearchNavigationKey = null;
 			replaceViewUrl('', authorPromotions);
 			return;
 		}
 		searchDebounce = setTimeout(() => {
+			if (navigationAnchorOrigin === 'search') navigationAnchorOrigin = 'selection';
 			activeSearchQuery = normalizeSearchQuery(value);
 			activeSearchNavigationKey = null;
 			replaceViewUrl(activeSearchQuery, authorPromotions);
@@ -1158,13 +1252,28 @@
 		targets: NavigationTarget[],
 		activeIndex: number,
 		direction: 1 | -1,
-		setActiveKey: (key: string) => void
+		origin: Exclude<NavigationAnchorOrigin, 'selection'>,
+		setActiveKey: (key: string) => void,
+		skipConsecutiveComments = false
 	): Promise<void> {
 		if (targets.length === 0) return;
-		const current = activeIndex >= 0 ? activeIndex : 0;
-		const next = (current + direction + targets.length) % targets.length;
-		const target = targets[next];
+		const nextIndex = resolveNavigationIndex({
+			targets,
+			activeIndex,
+			direction,
+			origin,
+			anchorCommentId: navigationAnchorCommentId,
+			anchorOrigin: navigationAnchorOrigin,
+			skipConsecutiveComments,
+			commentPosition: (commentId) => treeIndex.positionOf.get(commentId)
+		});
+
+		const target = targets[nextIndex];
 		setActiveKey(target.key);
+		highlightedIds.clear();
+		highlightedIds.add(target.commentId);
+		navigationAnchorCommentId = target.commentId;
+		navigationAnchorOrigin = origin;
 		await tick();
 		const element = document.querySelector<HTMLElement>(target.selector);
 		if (!element) return;
@@ -1191,6 +1300,7 @@
 		if (searchInput) {
 			cancelPendingSearchUpdate();
 			searchInput = '';
+			if (navigationAnchorOrigin === 'search') navigationAnchorOrigin = 'selection';
 			activeSearchQuery = '';
 			activeSearchNavigationKey = null;
 			replaceViewUrl('', authorPromotions);
@@ -1206,6 +1316,7 @@
 				searchNavigationTargets,
 				activeSearchNavigationIndex,
 				event.shiftKey ? -1 : 1,
+				'search',
 				(key) => (activeSearchNavigationKey = key)
 			);
 		} else if (event.key === 'Escape') {
@@ -1342,6 +1453,8 @@
 
 		lodState.clear();
 		highlightedIds.clear();
+		navigationAnchorCommentId = null;
+		navigationAnchorOrigin = 'selection';
 		ungroupAllFlag = false;
 		lodItemId = id;
 		if (id !== null) {
@@ -1411,6 +1524,8 @@
 		searchExpanded = false;
 		authorPromotions.clear();
 		highlightedIds.clear();
+		navigationAnchorCommentId = null;
+		navigationAnchorOrigin = 'selection';
 		ungroupAllFlag = false;
 		lodState.clear();
 		applyDefaultPolicy(false);
@@ -1491,7 +1606,7 @@
 		if (lod === 'L') setLOD([id], 'M');
 		else if (lod === 'M') setLOD([id], 'L');
 		else return;
-		setHighlight([id]);
+		setHighlight([id], id);
 	}
 
 	// --- S-grouping toggle (dev) ---
@@ -2252,7 +2367,8 @@
 						const snap = snapshotLayout();
 						onStripSegClick(
 							e,
-							strip.segments.map((s) => s.id)
+							strip.segments.map((s) => s.id),
+							seg.id
 						);
 						// After the strip unmounts, the first segment becomes a
 						// <d-comment> row — anchor scroll to it so the clicked
@@ -2338,6 +2454,7 @@
 						searchNavigationTargets,
 						activeSearchNavigationIndex,
 						-1,
+						'search',
 						(key) => (activeSearchNavigationKey = key)
 					)}
 			>
@@ -2353,6 +2470,7 @@
 						searchNavigationTargets,
 						activeSearchNavigationIndex,
 						1,
+						'search',
 						(key) => (activeSearchNavigationKey = key)
 					)}
 			>
@@ -2441,7 +2559,9 @@
 											highlightNavigationTargets,
 											activeHighlightNavigationIndex,
 											-1,
-											(key) => (activeHighlightNavigationKey = key)
+											'highlight',
+											(key) => (activeHighlightNavigationKey = key),
+											selectedHighlightSources.size === 1 && selectedHighlightSources.has('new')
 										)}
 									><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3 10 5-5 5 5" /></svg
 									></button
@@ -2456,7 +2576,9 @@
 											highlightNavigationTargets,
 											activeHighlightNavigationIndex,
 											1,
-											(key) => (activeHighlightNavigationKey = key)
+											'highlight',
+											(key) => (activeHighlightNavigationKey = key),
+											selectedHighlightSources.size === 1 && selectedHighlightSources.has('new')
 										)}
 									><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3 6 5 5 5-5" /></svg
 									></button

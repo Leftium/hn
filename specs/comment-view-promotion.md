@@ -212,6 +212,8 @@ target comment = NEW selected and comment is NEW
 - The first selected source chooses the first target without scrolling.
 - Preserve the active comment when it remains eligible. Otherwise choose the nearest surviving target without scrolling.
 - The active comment uses navigator-specific row styling distinct from click highlighting.
+- When NEW is the only selected source, previous and next jump between runs of consecutive NEW targets. Next lands on the first target of the next run; previous lands on the last target of the previous run.
+- Author-only and mixed NEW/author selections remain exact comment-by-comment navigation.
 
 The lane's trailing controls remain mounted whenever the highlight lane is available:
 
@@ -220,6 +222,19 @@ current / total | previous | next
 ```
 
 If no source is selected or selected sources have zero targets, show a subdued `0 / 0` and disable the arrows. Keeping these controls mounted prevents pill selection from shifting the layout. There is no separate clear action: users deselect selected pills directly. When promoted authors are available, deselecting the final source activates the first author again. Deselecting pills does not clear NEW state, unpin authors, remove URL parameters, or affect search.
+
+## Shared Reading Anchor
+
+The existing persistent blue click highlight is the visible reading anchor shared by both navigation lanes. It does not add another control or visual state.
+
+- Clicking a real comment row makes that comment the anchor.
+- Clicking a compressed-strip segment expands and highlights the strip as before, but the clicked segment is the single navigation anchor.
+- Successful Search or highlight navigation moves the blue highlight and anchor to the destination comment.
+- Interactive descendants such as links and buttons keep their native behavior and do not move the anchor.
+- Next resolves to the first eligible target strictly after a manually selected anchor; previous resolves to the last eligible target strictly before it. Both wrap.
+- A manual selection of a comment containing Search matches treats the whole comment as the boundary. Once Search lands on an occurrence, Search continues exact occurrence-by-occurrence navigation, including additional occurrences in the same comment.
+- Changing a query or selected highlight sources preserves the anchor while its comment remains in the item.
+- The anchor and blue highlight are transient and are not serialized in the URL.
 
 ## Header and Sticky Behavior
 
@@ -274,6 +289,7 @@ Not serialized:
 - Search disclosure without a valid query;
 - manual LOD state;
 - click highlighting;
+- the shared reading anchor;
 - NEW state or threshold.
 
 ## Reset Contract
@@ -287,6 +303,7 @@ Reset:
 - clears `selectedHighlightSources`;
 - collapses an empty search lane;
 - clears transient click highlighting;
+- clears the shared reading anchor;
 - clears manual base LOD mutations and global Ungroup policy;
 - reapplies the existing default base LOD policy;
 - preserves recorded visits and the current NEW threshold.
@@ -315,6 +332,12 @@ Highlight lane:
 - A NEW comment by a selected author appears once.
 - Unpinning an active author reconciles the target.
 - Clearing pills leaves highlights and URL promotion intact.
+- Selecting a non-target comment makes Next and Previous resolve strictly after and before it.
+- NEW-only navigation skips consecutive runs in both directions and wraps.
+- NEW plus author navigation remains exact comment-by-comment.
+- Strip expansion keeps its multi-row blue highlight while using the clicked segment as the anchor.
+- Navigation moves the blue anchor to its destination.
+- Manual selection skips all Search occurrences in that comment; subsequent Search navigation remains occurrence-exact.
 
 Layout and accessibility:
 
@@ -339,6 +362,8 @@ The implementation is complete when all of the following remain true:
 
 - Literal-alternative search emits one keyed mark per counted occurrence.
 - Search navigation lands on the exact active mark.
+- The blue selection is a shared reading anchor for both independent lanes.
+- NEW-only navigation jumps between consecutive runs; Search, author-only, and mixed-source navigation remain exact.
 - Search and author promotion restore from item URLs.
 - Search starts open when no highlight pills are available; otherwise its disclosure remains independent from highlight navigation.
 - NEW has automatic priority, with the first promoted author selected when no source remains active.
