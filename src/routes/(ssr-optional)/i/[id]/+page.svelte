@@ -2080,12 +2080,31 @@
 	onMount(() => {
 		const onPopState = () => hydratePromotionState(new URL(window.location.href));
 		window.addEventListener('popstate', onPopState);
+		const setNavigationHeaderCompact = (compact: boolean) => {
+			if (compact === navigationHeaderCompact) return;
+			const refocusSearch = document.activeElement === searchElement;
+			const selectionStart = refocusSearch ? searchElement?.selectionStart : null;
+			const selectionEnd = refocusSearch ? searchElement?.selectionEnd : null;
+			const selectionDirection = refocusSearch ? searchElement?.selectionDirection : null;
+			navigationHeaderCompact = compact;
+			if (!refocusSearch) return;
+			void tick().then(() => {
+				searchElement?.focus({ preventScroll: true });
+				if (selectionStart !== null && selectionEnd !== null) {
+					searchElement?.setSelectionRange(
+						selectionStart,
+						selectionEnd,
+						selectionDirection ?? undefined
+					);
+				}
+			});
+		};
 		const updateNavigationHeaderCompact = () => {
 			if (!navigationSentinel) return;
-			navigationHeaderCompact = navigationSentinel.getBoundingClientRect().bottom <= 0;
+			setNavigationHeaderCompact(navigationSentinel.getBoundingClientRect().bottom <= 0);
 		};
 		const navigationObserver = new IntersectionObserver(([entry]) => {
-			navigationHeaderCompact = !entry.isIntersecting && entry.boundingClientRect.bottom <= 0;
+			setNavigationHeaderCompact(!entry.isIntersecting && entry.boundingClientRect.bottom <= 0);
 		});
 		if (navigationSentinel) navigationObserver.observe(navigationSentinel);
 		window.addEventListener('scroll', updateNavigationHeaderCompact, {
@@ -2743,7 +2762,8 @@
 			<d-view-controls>
 				<d-highlight-navigation
 					aria-label="Navigate highlighted comments"
-					class:inline-search={searchExpanded && !highlightLaneAvailable}
+					class:inline-search={searchExpanded &&
+						(!highlightLaneAvailable || navigationHeaderCompact)}
 				>
 					<button
 						type="button"
@@ -2777,6 +2797,9 @@
 								><circle cx="7" cy="7" r="4.5" /><path d="m10.5 10.5 3 3" /></svg
 							>
 						</button>
+					{/if}
+					{#if searchExpanded && highlightLaneAvailable && navigationHeaderCompact}
+						{@render searchNavigator()}
 					{/if}
 					{#if highlightLaneAvailable}
 						<d-highlight-cluster>
@@ -2846,7 +2869,7 @@
 						</d-highlight-cluster>
 					{/if}
 				</d-highlight-navigation>
-				{#if searchExpanded && highlightLaneAvailable}
+				{#if searchExpanded && highlightLaneAvailable && !navigationHeaderCompact}
 					{@render searchNavigator()}
 				{/if}
 				{#if filterExpanded}
@@ -3035,6 +3058,10 @@
 				grid-column: 1;
 			}
 
+			d-highlight-navigation {
+				grid-row: 1;
+			}
+
 			d-highlight-pills {
 				flex-wrap: nowrap;
 				overflow-x: auto;
@@ -3178,9 +3205,13 @@
 		gap: var(--size-1);
 
 		&.inline-search d-view-search {
-			flex: 1 1 auto;
-			min-width: 0;
+			flex: 1 1 10rem;
+			min-width: min(10rem, 32vw);
 			width: auto;
+		}
+
+		&.inline-search d-highlight-pills {
+			max-width: 9rem;
 		}
 	}
 
@@ -3625,6 +3656,18 @@
 
 			&.below-filter {
 				grid-row: 4;
+			}
+		}
+	}
+
+	@media (max-width: 480px) {
+		d-nav.compact d-highlight-navigation.inline-search {
+			flex-wrap: wrap;
+
+			d-view-search {
+				order: 1;
+				flex-basis: 100%;
+				min-width: 0;
 			}
 		}
 	}
