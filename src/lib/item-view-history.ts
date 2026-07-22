@@ -2,13 +2,13 @@
  * IndexedDB-backed per-item view history for tracking new comments.
  *
  * Stores a bounded list of distinct visible-comment-count checkpoints per item.
- * Auto-evicts entries older than the HN comment window.
+ * Auto-evicts item records whose latest view checkpoint is outside the retention window.
  */
 
 const DB_NAME = 'hn-app';
 const DB_VERSION = 1;
 const STORE_NAME = 'item-views';
-const MAX_AGE_SECONDS = 15 * 24 * 60 * 60; // 15 days (HN locks comments at ~14d)
+const MAX_AGE_SECONDS = 15 * 24 * 60 * 60;
 const MAX_VISITS = 20;
 
 export interface ItemViewCheckpoint {
@@ -124,7 +124,8 @@ export async function beginItemView(
 }
 
 /**
- * Remove entries older than MAX_AGE_SECONDS.
+ * Remove records whose latest viewedAt is older than MAX_AGE_SECONDS.
+ * Submission age is irrelevant, so a newly viewed old or reposted item is retained.
  */
 async function evictStaleEntries(): Promise<void> {
 	const db = await openDb();

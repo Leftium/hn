@@ -10,7 +10,7 @@ Preserve the current previous-view NEW behavior while adding bounded, comment-co
 
 ## Overview
 
-The item reader currently treats a comment as NEW when its timestamp is later than the item's previous `viewedAt` timestamp. This default is useful and remains the primary behavior. The missing control is recovery: an accidental reload can advance the stored view before the reader has finished the comments that were NEW.
+Before this change, the item reader treated a comment as NEW when its timestamp was later than the item's previous `viewedAt` timestamp. That default is useful and remains the primary behavior. The missing control was recovery: an accidental reload could advance the stored view before the reader had finished the comments that were NEW.
 
 This change keeps a bounded checkpoint history per item. A load records a checkpoint only when the visible comment count differs from the latest checkpoint. Loads with the same count continue using the same automatic cutoff. A filter button beside Search discloses a compact timeline containing relative comment activity, visit markers, a cutoff slider, and previous/next marker actions. Timeline adjustments are transient; every item load starts from the history-derived automatic cutoff.
 
@@ -39,7 +39,7 @@ Out of scope:
 - Cross-device synchronization.
 - Changing HN's comment availability or lock behavior.
 
-## Current State
+## Baseline State
 
 `src/lib/item-view-history.ts` stores one IndexedDB record per item:
 
@@ -170,15 +170,14 @@ The timeline is complex UI and stays hidden until explicitly disclosed. It must 
 
 ### Time domain
 
-The horizontal domain uses actual discussion activity, with two weeks as a hard maximum rather than the default displayed width:
+The horizontal domain uses actual discussion activity and remains linear across dormant periods:
 
 ```txt
-hard end     = min(current time, item.time + 14 days)
 activity end = start of the relative day after the latest visible comment
-visible end  = min(hard end, activity end)
+visible end  = min(current time, activity end)
 ```
 
-The relative-day calculation targets at least a one-day domain, capped by the current time for younger posts. For example, a thread whose latest comment arrived 5 days and 3 hours after posting ends at 6 days. A currently active thread whose padded activity end is in the future ends at now.
+The relative-day calculation targets at least a one-day domain, capped by the current time for younger posts. For example, a thread whose latest comment arrived 5 days and 3 hours after posting ends at 6 days. A currently active thread whose padded activity end is in the future ends at now. An old thread with renewed activity extends through that activity, preserving the dormant gap instead of inferring a repost timestamp that the data sources do not reliably expose.
 
 The control displays elapsed time since the post, not calendar labels. The selected-value label uses compact relative units such as `3h after posting`, `2d 6h after posting`, or `Now`. Its accessible value text also includes the absolute local datetime.
 
@@ -320,8 +319,8 @@ The operation reads the current record, derives the cutoff, conditionally append
 - **Same count, different membership:** Deduplication intentionally treats this as the same checkpoint. HN comment IDs and counts do not expose a cheap stable membership signature in the current history model. The manual timeline remains the recovery path.
 - **Deleted comments lower the count:** Record a distinct checkpoint because the visible discussion state changed.
 - **Clock skew or future timestamps:** Clamp UI selection and markers to the domain; keep raw classification semantics defensive and deterministic.
-- **Post older than 14 days:** Never extend beyond day 14; the activity bound may still make the visible domain shorter.
-- **Inactive discussion:** End at the next whole relative day after its latest visible comment instead of showing an empty tail through day 14.
+- **Old thread with late comments:** Keep a linear axis from the original submission through the renewed activity; do not infer a repost timestamp.
+- **Inactive discussion:** End at the next whole relative day after its latest visible comment instead of showing an empty tail through the current time.
 - **Automatic cutoff after the visible domain:** Preserve the real timestamp for NEW classification but clamp the displayed thumb to the endpoint; both positions classify zero loaded comments as NEW.
 - **No comments:** Render an empty plot and functional endpoints; do not fabricate activity bars.
 - **All activity in one bucket:** Render that bucket at full relative height and the others empty.

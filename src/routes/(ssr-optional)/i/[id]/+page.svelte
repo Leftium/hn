@@ -40,7 +40,6 @@
 		'light-dark(#087b83, #65d2da)'
 	];
 	const DAY_SECONDS = 24 * 60 * 60;
-	const COMMENT_WINDOW_SECONDS = 14 * 24 * 60 * 60;
 	const ACTIVITY_BUCKET_COUNT = 32;
 	const MIN_NONEMPTY_ACTIVITY_HEIGHT = 0.12;
 
@@ -658,14 +657,10 @@
 	});
 	const timelineEnd = $derived.by(() => {
 		if (!displayItem) return 0;
-		const hardEnd = Math.max(
-			timelineStart,
-			Math.min(timelineNow, timelineStart + COMMENT_WINDOW_SECONDS)
-		);
 		const elapsedActivity = Math.max(0, latestVisibleCommentTime - timelineStart);
 		const paddedActivityEnd =
 			timelineStart + (Math.floor(elapsedActivity / DAY_SECONDS) + 1) * DAY_SECONDS;
-		return Math.min(hardEnd, paddedActivityEnd);
+		return Math.max(timelineStart, Math.min(timelineNow, paddedActivityEnd));
 	});
 	const clampedAdjustedNewCommentThreshold = $derived(
 		adjustedNewCommentThreshold === null || !displayItem
