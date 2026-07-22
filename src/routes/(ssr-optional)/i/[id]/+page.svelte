@@ -408,21 +408,16 @@
 		const continueExactOccurrence =
 			origin === 'search' &&
 			!!activeTarget &&
-			(anchorCommentId === null ||
-				(anchorOrigin === 'search' && activeTarget.commentId === anchorCommentId));
+			anchorOrigin === 'search' &&
+			activeTarget.commentId === anchorCommentId;
 
 		if (continueExactOccurrence) {
 			return (activeIndex + direction + targets.length) % targets.length;
 		}
 
 		const boundaryPosition = direction === 1 ? -1 : Number.POSITIVE_INFINITY;
-		const currentPosition =
-			anchorPosition ??
-			(activeTarget
-				? (commentPosition(activeTarget.commentId) ?? boundaryPosition)
-				: boundaryPosition);
-		const runStartIndex =
-			anchorTargetIndex >= 0 ? anchorTargetIndex : anchorPosition === undefined ? activeIndex : -1;
+		const currentPosition = anchorPosition ?? boundaryPosition;
+		const runStartIndex = anchorTargetIndex;
 
 		if (skipConsecutiveComments && runStartIndex >= 0) {
 			let edgeIndex = runStartIndex;
@@ -1006,6 +1001,17 @@
 	const highlightedIds = new SvelteSet<number>();
 	let navigationAnchorCommentId = $state<number | null>(null);
 	let navigationAnchorOrigin = $state<NavigationAnchorOrigin>('selection');
+
+	function formatNavigationStatus(
+		targets: NavigationTarget[],
+		activeIndex: number,
+		origin: Exclude<NavigationAnchorOrigin, 'selection'>
+	): string {
+		const activeTarget = targets[activeIndex];
+		const positionIsCurrent =
+			navigationAnchorOrigin === origin && activeTarget?.commentId === navigationAnchorCommentId;
+		return positionIsCurrent ? `${activeIndex + 1} / ${targets.length}` : `? / ${targets.length}`;
+	}
 
 	function setHighlight(ids: Iterable<number>, anchorId: number): void {
 		highlightedIds.clear();
@@ -2605,9 +2611,7 @@
 				onkeydown={onSearchKeydown}
 			/>
 			<s-navigation-status aria-live="polite">
-				{searchNavigationTargets.length === 0 || activeSearchNavigationIndex < 0
-					? '0 / 0'
-					: `${activeSearchNavigationIndex + 1} / ${searchNavigationTargets.length}`}
+				{formatNavigationStatus(searchNavigationTargets, activeSearchNavigationIndex, 'search')}
 			</s-navigation-status>
 			<button
 				type="button"
@@ -2827,9 +2831,11 @@
 							</d-highlight-pills>
 							<d-highlight-controls class:inactive={selectedHighlightSources.size === 0}>
 								<s-navigation-status aria-live="polite"
-									>{highlightNavigationTargets.length === 0 || activeHighlightNavigationIndex < 0
-										? '0 / 0'
-										: `${activeHighlightNavigationIndex + 1} / ${highlightNavigationTargets.length}`}</s-navigation-status
+									>{formatNavigationStatus(
+										highlightNavigationTargets,
+										activeHighlightNavigationIndex,
+										'highlight'
+									)}</s-navigation-status
 								>
 								<button
 									type="button"
