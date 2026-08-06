@@ -148,7 +148,7 @@ effective LOD = max(
 )
 ```
 
-The parent-context minimum is M and applies to the direct parent of every real comment by a promoted author.
+The parent-context minimum is M and applies to the direct parent of every real comment promoted by author, search, or NEW status.
 
 Examples:
 
@@ -175,14 +175,14 @@ An S comment promoted to M therefore breaks an existing strip at its original de
 
 ### Promoted reply context
 
-While an author is promoted, the direct parent of each of their real comments receives a minimum effective LOD of M. The compact parent row exposes the author, timestamp, and text preview needed to understand what the promoted comment is replying to.
+While a real comment is promoted by author, search, or NEW status, its direct parent receives a minimum effective LOD of M. The compact parent row exposes the author, timestamp, and text preview needed to understand what the promoted comment is replying to.
 
-- Only direct parents are added by this policy; it does not recursively expand ancestors solely because they provide context. If several comments in a same-author reply chain are independently promoted, each may add its own direct parent.
+- Only direct parents are added by this policy; it does not recursively expand ancestors solely because they provide context. If several comments in a reply chain are independently promoted, each may add its own direct parent.
 - A parent shared by several promoted replies renders once at its original position.
 - Top-level promoted comments do not create context because their parent is the story.
-- Context promotion is derived from current author promotion and the tree index. It never writes to `lodState`, and changing a promoted reply's base LOD does not remove its parent context.
-- Removing or weakening author promotion immediately removes parent context that is no longer required and reveals the parent's current base or other effective minimum.
-- NEW promotion alone does not promote parent context.
+- Context promotion is derived from current author, search, and NEW promotion policies plus the tree index. It never writes to `lodState`, and changing a promoted reply's base LOD does not remove its parent context.
+- Removing or changing a promotion policy immediately removes parent context that is no longer required and reveals the parent's current base or other effective minimum.
+- A NEW reply promotes its direct parent for context even when NEW is not selected in the highlight navigator. This keeps the layout stable while cycling through NEW comments.
 
 The existing tree index must expose enough comment data to calculate author and NEW minima without repeatedly walking the raw tree. The implementation may add an `itemById` or `commentById` lookup to `TreeIndex` if needed.
 
@@ -220,6 +220,7 @@ NEW supplies a minimum effective LOD of M.
 - The existing NEW badge, orange right border, faint background, and count remain unchanged.
 - Newly hydrated or live comments use the current threshold and receive the minimum immediately.
 - A promoted author at L wins over the NEW minimum of M.
+- A NEW reply's direct parent receives the same M context minimum used for author- and search-promoted replies.
 - There is no separate NEW promotion button in this scope.
 
 ## Lifecycle
@@ -285,6 +286,7 @@ Synthetic promoted-link rows and deleted comments do not expose author actions. 
 - [ ] NEW comments render at effective M or L, never S.
 - [ ] Promoted and NEW comments keep their original depth-first positions.
 - [ ] A promoted reply whose parent would otherwise be S shows that parent at effective M without expanding the full ancestor chain.
+- [ ] Cycling through NEW replies keeps each direct parent visible at effective M without changing layout between navigation steps.
 - [ ] Existing row, subtree, Ungroup all, and Expand all actions remain usable without clearing promotion policies.
 - [ ] New or hydrated comments inherit author and NEW promotion without resetting current thread state.
 - [ ] OP, NEW, and just-clicked visual treatments remain distinguishable.

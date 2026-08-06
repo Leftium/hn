@@ -790,7 +790,7 @@
 	);
 	const searchMatchIds = $derived(new SvelteSet(searchPlanByComment.keys()));
 
-	// Keep the direct parent of each author- or search-promoted reply readable as
+	// Keep the direct parent of each author-, search-, or NEW-promoted reply readable as
 	// an M row so the reply retains local context after its base LOD changes.
 	// This is derived rendering policy only; it never writes into lodState.
 	const promotionContextParentIds = $derived.by(() => {
@@ -799,7 +799,7 @@
 			const comment = treeIndex.commentById.get(id);
 			if (!comment || comment.promotedRole) continue;
 			const authorPromoted = !!comment.user && authorPromotions.has(comment.user);
-			if (!authorPromoted && !searchMatchIds.has(id)) continue;
+			if (!authorPromoted && !searchMatchIds.has(id) && !isNewComment(comment)) continue;
 			const parentId = treeIndex.parentOf.get(id);
 			if (parentId !== undefined && treeIndex.commentById.has(parentId)) parentIds.add(parentId);
 		}
