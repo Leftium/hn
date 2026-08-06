@@ -2089,8 +2089,8 @@
 		const setNavigationHeaderCompact = (compact: boolean) => {
 			if (compact === navigationHeaderCompact) return;
 			const refocusSearch = document.activeElement === searchElement;
-			const selectionStart = refocusSearch ? searchElement?.selectionStart : null;
-			const selectionEnd = refocusSearch ? searchElement?.selectionEnd : null;
+			const selectionStart = refocusSearch ? (searchElement?.selectionStart ?? null) : null;
+			const selectionEnd = refocusSearch ? (searchElement?.selectionEnd ?? null) : null;
 			const selectionDirection = refocusSearch ? searchElement?.selectionDirection : null;
 			navigationHeaderCompact = compact;
 			if (!refocusSearch) return;
