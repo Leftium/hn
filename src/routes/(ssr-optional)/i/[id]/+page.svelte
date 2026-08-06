@@ -2996,7 +2996,7 @@
 			{#if item.content}
 				<d-item-body>
 					<!-- eslint-disable-next-line svelte/no-at-html-tags -- HN API returns intentional item HTML -->
-					{@html item.content}
+					{@html item.type === 'comment' ? formatCommentContent(item.content) : item.content}
 				</d-item-body>
 			{/if}
 		</d-header>
