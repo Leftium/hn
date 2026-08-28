@@ -14,11 +14,17 @@ const SOURCE_URLS: Record<string, string> = {
 function parseHNHTML(html: string): { stories: NormalizedStory[]; nextId?: string } {
 	const stories: NormalizedStory[] = [];
 	const storyRegex =
-		/<tr class="athing submission" id="(\d+)">.*?<span class="titleline"><a href="([^"]+)"[^>]*>([^<]+)<\/a>(?:<span class="sitebit comhead">.*?<span class="sitestr">([^<]+)<\/span>.*?<\/span>)?<\/span>.*?<span class="score"[^>]*>(\d+) points?<\/span> by <a href="user\?id=([^"]+)"[^>]*>[^<]+<\/a> <span class="age" title="[^"]+\s+(\d{10,})".*?<\/span>.*?(?:<a href="item\?id=\d+">(\d+)&nbsp;comments?<\/a>|<a href="item\?id=\d+">discuss<\/a>)/gs;
+		/<tr class="athing submission" id="(\d+)">.*?<span class="titleline"><a href="([^"]+)"[^>]*>([^<]+)<\/a>(?:<span class="sitebit comhead">.*?<span class="sitestr">([^<]+)<\/span>.*?<\/span>)?<\/span>.*?<span class="score"[^>]*>(\d+) points?<\/span> by <a href="user\?id=([^"]+)"[^>]*>[^<]+<\/a> <span class="age" title="([^"]+)".*?<\/span>.*?(?:<a href="item\?id=\d+">(\d+)&nbsp;comments?<\/a>|<a href="item\?id=\d+">discuss<\/a>)/gs;
 
 	let match;
 	while ((match = storyRegex.exec(html)) !== null) {
-		const [, id, url, rawTitle, domain, points, user, timestamp, comments] = match;
+		const [, id, url, rawTitle, domain, points, user, ageTitle, comments] = match;
+		const legacyTimestamp = ageTitle.match(/(?:^|\s)(\d{10,})$/)?.[1];
+		const timestamp = legacyTimestamp
+			? parseInt(legacyTimestamp, 10)
+			: Math.floor(Date.parse(ageTitle) / 1000);
+
+		if (!Number.isFinite(timestamp)) continue;
 
 		const title = rawTitle
 			.replace(/&amp;/g, '&')
@@ -53,7 +59,7 @@ function parseHNHTML(html: string): { stories: NormalizedStory[]; nextId?: strin
 			domain: finalDomain,
 			points: parseInt(points, 10),
 			comments: comments ? parseInt(comments, 10) : 0,
-			time: parseInt(timestamp, 10),
+			time: timestamp,
 			user
 		});
 	}
