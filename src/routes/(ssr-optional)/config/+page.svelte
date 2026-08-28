@@ -11,6 +11,7 @@
 	let datetimeTimestamp = $state<number | null>(untrack(() => data?.selectedOverride ?? null));
 	let minKarma = $state(untrack(() => data?.minKarma ?? ''));
 	let minAgeYears = $state(untrack(() => data?.minAgeYears ?? ''));
+	let violationThreshold = $state(untrack(() => data?.violationThreshold ?? ''));
 
 	let formElement: HTMLFormElement;
 	let datetimeInput: HTMLInputElement;
@@ -175,6 +176,32 @@
 					onchange={autoSubmit}
 				/>
 				<span class="field-suffix">years</span>
+			</label>
+		</div>
+
+		<h2>
+			Comment guideline threshold
+			<span class="subheader">(visually de-emphasize possible violations)</span>
+		</h2>
+
+		<p class="explanation">
+			Comments stay visible, but are faded when any classifier score meets the threshold.
+		</p>
+
+		<div class="threshold-grid">
+			<label>
+				<span>Minimum confidence</span>
+				<input
+					type="number"
+					name="comment_violation_threshold"
+					min="0.2"
+					max="1"
+					step="0.05"
+					inputmode="decimal"
+					placeholder="off"
+					bind:value={violationThreshold}
+					onchange={autoSubmit}
+				/>
 			</label>
 		</div>
 

@@ -1,4 +1,5 @@
 import { redirect } from '@sveltejs/kit';
+import { parseViolationThreshold } from '$lib/comment-violations';
 import type { Actions, PageServerLoad } from './$types';
 
 const COOKIE_OPTIONS = {
@@ -46,6 +47,7 @@ export const load: PageServerLoad = async ({ cookies, url }) => {
 		pagesPerLoad: parseInt(cookies.get('pages_per_load') ?? '1', 10),
 		minKarma: parseOptionalPositiveInt(cookies.get('min_user_karma')),
 		minAgeYears: parseOptionalPositiveInt(cookies.get('min_user_age_years')),
+		violationThreshold: parseViolationThreshold(cookies.get('comment_violation_threshold')),
 		selectedOverride: isOverridden && thresholdCookie ? parseInt(thresholdCookie, 10) : null
 	};
 };
@@ -58,6 +60,7 @@ export const actions: Actions = {
 		const customDatetime = data.get('custom_datetime');
 		const minKarma = parseOptionalPositiveInt(data.get('min_user_karma'));
 		const minAgeYears = parseOptionalPositiveInt(data.get('min_user_age_years'));
+		const violationThreshold = parseViolationThreshold(data.get('comment_violation_threshold'));
 
 		if (pagesPerLoad) {
 			cookies.set('pages_per_load', pagesPerLoad.toString(), COOKIE_OPTIONS);
@@ -73,6 +76,12 @@ export const actions: Actions = {
 			cookies.set('min_user_age_years', minAgeYears, COOKIE_OPTIONS);
 		} else {
 			cookies.delete('min_user_age_years', { path: '/' });
+		}
+
+		if (violationThreshold !== null) {
+			cookies.set('comment_violation_threshold', violationThreshold.toString(), COOKIE_OPTIONS);
+		} else {
+			cookies.delete('comment_violation_threshold', { path: '/' });
 		}
 
 		if (thresholdSource === 'custom' && customDatetime) {

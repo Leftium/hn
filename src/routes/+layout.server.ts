@@ -1,4 +1,5 @@
 import { getEffectiveHostname } from '$lib/effective-host';
+import { parseViolationThreshold } from '$lib/comment-violations';
 
 import type { LayoutServerLoad } from './$types';
 
@@ -12,10 +13,12 @@ export const load: LayoutServerLoad = async ({ cookies, url }) => {
 		isLegacyHost: boolean;
 		sessionExpires?: number;
 		visitData?: { total: number };
+		violationThreshold: number | null;
 	} = {
 		// hw.leftium.com is the legacy HckrWeb host; no-JS visitors there likely arrived
 		// from old hash-based links that cannot be redirected on the server.
-		isLegacyHost: effectiveHostname === 'hw.leftium.com'
+		isLegacyHost: effectiveHostname === 'hw.leftium.com',
+		violationThreshold: parseViolationThreshold(cookies.get('comment_violation_threshold'))
 	};
 
 	if (sessionStartCookie) {

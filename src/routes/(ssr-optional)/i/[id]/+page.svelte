@@ -3,6 +3,13 @@
 	import { domainify, fetchHNItemTree } from '$lib/fetch-hn-item';
 	import { fetchHnpwaItem } from '$lib/fetch-hnpwa';
 	import {
+		guidelineTooltip,
+		matchingGuidelines,
+		parseViolationResult,
+		parseViolationThreshold,
+		type GuidelineScore
+	} from '$lib/comment-violations';
+	import {
 		beginItemView,
 		countNewComments,
 		countVisibleComments,
@@ -582,6 +589,18 @@
 
 	let item = $state<HNItem | null>(null);
 	let itemError = $state<string | null>(null);
+	let commentViolations = $state<Record<number, GuidelineScore[]>>({});
+	const violationThreshold = $derived.by(() => {
+		const urlValue = page.url.searchParams.get('violation_threshold');
+		return urlValue === null
+			? parseViolationThreshold(page.data.violationThreshold)
+			: parseViolationThreshold(urlValue);
+	});
+
+	function commentGuidelineMatches(comment: RenderHNItem): GuidelineScore[] {
+		if (comment.promotedRole || violationThreshold === null) return [];
+		return matchingGuidelines(commentViolations[comment.id], violationThreshold);
+	}
 	let fullItem = $state<HNItem | null>(null);
 	let lodItemId = $state<number | null>(null);
 	const firebaseLoadedIds = new SvelteSet<number>();
@@ -2023,6 +2042,7 @@
 		item = null;
 		fullItem = null;
 		itemError = null;
+		commentViolations = {};
 		automaticNewCommentThreshold = null;
 		adjustedNewCommentThreshold = null;
 		itemViewCheckpoints = [];
@@ -2038,6 +2058,19 @@
 
 		const hnpwaRequest = fetchHnpwaItem(id, fetch);
 		const firebaseRequest = fetchHNItemTree(id, fetch, { maxDepth: 1 });
+		if (violationThreshold !== null) {
+			void fetch(`/api/comment-violations/${id}`)
+				.then((response) => (response.ok ? response.json() : null))
+				.then((value) => {
+					if (cancelled) return;
+					const result = parseViolationResult(value);
+					if (!result) return;
+					commentViolations = Object.fromEntries(
+						result.violations.map(({ id: commentId, rules }) => [commentId, rules])
+					);
+				})
+				.catch(() => {});
+		}
 
 		// HNPWA is the fast, complete preview. Render it immediately when it
 		// wins, but coordinate both sources before beginning Firebase hydration.
@@ -2287,6 +2320,9 @@
 	{@const indent = Math.min(level - 1, MAX_INDENT)}
 	{@const colorIndex = (level - 1) % LEVEL_COLORS.length}
 	{@const barWidth = level === 1 ? 0 : Math.min(1 + level, 14)}
+	{@const guidelineMatches = commentGuidelineMatches(comment)}
+	{@const guidelineTitle = guidelineTooltip(guidelineMatches)}
+	{@const guidelineTooltipId = guidelineTitle ? `guideline-tooltip-${comment.id}` : undefined}
 	<!--
 		Row click (and Enter/Space) toggles LOD (L↔M). We deliberately do NOT
 		add role="button" because nimble.css styles [role="button"] as a full
@@ -2320,6 +2356,8 @@
 		class:preview={!isSynthetic && !firebaseLoadedIds.has(comment.id)}
 		class:just-clicked={highlightedIds.has(comment.id)}
 		class:navigation-target-active={activeHighlightNavigationCommentId === comment.id}
+		class:guideline-threshold-failed={guidelineMatches.length > 0}
+		aria-describedby={guidelineTooltipId}
 		data-comment-id={comment.id}
 		data-lod={lod}
 		data-level={level}
@@ -2348,6 +2386,11 @@
 			await animateLayoutChange(snap, el, rectBefore);
 		}}
 	>
+		{#if guidelineTitle}
+			<s-guideline-tooltip id={guidelineTooltipId} role="tooltip">
+				{guidelineTitle}
+			</s-guideline-tooltip>
+		{/if}
 		{#if lod === 'S'}
 			<!-- Ungrouped S row (?group=0 dev path): colored block placeholder,
 			     click promotes to M to match the production click rule. -->
@@ -4072,6 +4115,33 @@
 			opacity: 0.5;
 		}
 
+		&.guideline-threshold-failed {
+			opacity: 0.18;
+			filter: blur(1.5px);
+			transition:
+				opacity 120ms ease,
+				filter 120ms ease;
+		}
+
+		&.guideline-threshold-failed:hover,
+		&.guideline-threshold-failed:focus-within,
+		&.guideline-threshold-failed:focus {
+			opacity: 1;
+			filter: none;
+			grid-template-areas:
+				'tooltip'
+				'body'
+				'meta';
+
+			s-guideline-tooltip {
+				display: block;
+			}
+		}
+
+		&.guideline-threshold-failed:is(:hover, :focus-within, :focus)[data-lod='M'] {
+			flex-wrap: wrap;
+		}
+
 		&.op d-comment-meta s-author {
 			color: #ff6600;
 			font-weight: var(--font-weight-6);
@@ -4144,6 +4214,24 @@
 			padding-top: var(--size-1);
 			padding-bottom: var(--size-1);
 		}
+	}
+
+	s-guideline-tooltip {
+		display: none;
+		grid-area: tooltip;
+		order: -1;
+		flex: 1 0 100%;
+		box-sizing: border-box;
+		width: 100%;
+		padding: var(--size-2);
+		color: light-dark(#222, #eee);
+		background: light-dark(rgb(255 255 255 / 0.98), rgb(30 30 30 / 0.98));
+		border: 1px solid light-dark(#bbb, #555);
+		border-radius: 4px;
+		box-shadow: 0 2px 6px rgb(0 0 0 / 0.16);
+		font-size: var(--font-size-0);
+		line-height: 1.35;
+		white-space: pre-line;
 	}
 
 	s-level {
