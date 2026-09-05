@@ -2927,14 +2927,16 @@
 				{#if filterExpanded}
 					{@render newCommentTimeline(item.id)}
 				{/if}
-				<d-view-toolbar role="group" aria-label="Comment view">
+				<d-view-toolbar role="group" aria-label="All comments">
+					<span class="view-toolbar-label">All comments</span>
 					<button
 						type="button"
 						class="view-toolbar-btn secondary"
 						class:active={ungroupAllActive}
 						aria-pressed={ungroupAllActive}
 						disabled={allLActive}
-						title="Show every comment (no grouped strips)"
+						aria-label="Show all comments at least at medium detail"
+						title="Show all comments at least at medium detail"
 						onclick={async (e) => {
 							const anchor = e.currentTarget as HTMLElement;
 							const rectBefore = anchor.getBoundingClientRect();
@@ -2943,14 +2945,15 @@
 							await animateLayoutChange(snap, anchor, rectBefore);
 						}}
 					>
-						Ungroup
+						M
 					</button>
 					<button
 						type="button"
 						class="view-toolbar-btn secondary"
 						class:active={allLActive}
 						aria-pressed={allLActive}
-						title="Expand all comments to full detail"
+						aria-label="Show all comments at full detail"
+						title="Show all comments at full detail"
 						onclick={async (e) => {
 							const anchor = e.currentTarget as HTMLElement;
 							const rectBefore = anchor.getBoundingClientRect();
@@ -2959,7 +2962,7 @@
 							await animateLayoutChange(snap, anchor, rectBefore);
 						}}
 					>
-						Expand
+						L
 					</button>
 					<button
 						type="button"
@@ -3154,6 +3157,15 @@
 		grid-row: 1;
 		justify-self: end;
 		margin-bottom: 0;
+	}
+
+	.view-toolbar-label {
+		display: inline-flex;
+		align-items: center;
+		padding-inline: var(--size-2);
+		font-size: var(--font-size-1);
+		white-space: nowrap;
+		color: light-dark(#666, #aaa);
 	}
 
 	:is(d-view-toolbar, s-author-actions, s-lod-scope)[role='group'] {
