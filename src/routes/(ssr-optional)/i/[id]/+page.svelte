@@ -710,6 +710,7 @@
 		commentById: SvelteMap<number, RenderHNItem>;
 		allIds: number[]; // every visible comment id in depth-first pre-order (excludes post)
 		positionOf: SvelteMap<number, number>; // comment id → index in allIds
+		primarySpineIds: ReadonlySet<number>; // normal top-level comments + recursive first-child paths
 	}
 
 	const treeIndex = $derived.by<TreeIndex>(() => {
@@ -739,7 +740,38 @@
 		}
 		if (displayTree) walk(displayTree.comments, displayTree.id, 1);
 
-		return { parentOf, childrenOf, levelOf, promotedRoleOf, commentById, allIds, positionOf };
+		// Each normal top-level comment starts a primary spine. A deeper comment
+		// joins that spine only when its parent is already on it and the comment is
+		// the parent's first visible child. Since allIds is pre-order, parents are
+		// always classified before their children.
+		const primarySpineIds = new Set<number>();
+		for (const id of allIds) {
+			if (promotedRoleOf.has(id)) continue;
+			const level = levelOf.get(id) ?? 0;
+			if (level === 1) {
+				primarySpineIds.add(id);
+				continue;
+			}
+			const parentId = parentOf.get(id);
+			if (
+				parentId !== undefined &&
+				primarySpineIds.has(parentId) &&
+				childrenOf.get(parentId)?.[0] === id
+			) {
+				primarySpineIds.add(id);
+			}
+		}
+
+		return {
+			parentOf,
+			childrenOf,
+			levelOf,
+			promotedRoleOf,
+			commentById,
+			allIds,
+			positionOf,
+			primarySpineIds
+		};
 	});
 	const activityBuckets = $derived.by(() => {
 		const counts = Array<number>(ACTIVITY_BUCKET_COUNT).fill(0);
@@ -1565,10 +1597,12 @@
 	// after flipping this flag when they want a reset.
 	let ungroupAllFlag = $state(false);
 
-	// --- Phase 4/5: default initial LOD state by level ---
-	// Bucket by level and apply default LOD: L for level 1, M for level 2,
-	// and S (or M when ungroup is true) for level ≥ 3. Does NOT clear
-	// lodState on its own — callers clear first when they want a reset.
+	// --- Phase 4/5: default initial LOD state by tree position ---
+	// Apply default LOD: L for every normal comment on a primary spine, M for
+	// remaining level-2 comments, and S (or M when ungroup is true) for
+	// remaining comments at level >= 3. Synthetic promoted rows retain their
+	// special defaults. Does NOT clear lodState on its own; callers clear first
+	// when they want a reset.
 	// Scope: when ids is provided, only those ids receive default policy
 	// (used by B3 Ungroup subtree's "re-run within scope" path).
 	//
@@ -1586,7 +1620,7 @@
 			const promotedRole = treeIndex.promotedRoleOf.get(id);
 			if (promotedRole === 'primary') M.push(id);
 			else if (promotedRole === 'alternate') S.push(id);
-			else if (lv <= 1) L.push(id);
+			else if (lv <= 1 || treeIndex.primarySpineIds.has(id)) L.push(id);
 			else if (lv === 2) M.push(id);
 			else if (ungroup) M.push(id);
 			else S.push(id);

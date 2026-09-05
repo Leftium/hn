@@ -255,25 +255,33 @@ Rationale: the legacy logic was ~700 lines entangled across state, template, and
 
 On item load (and on navigation between items):
 
-- Level 1 comments → L (default, no explicit write)
-- Level 2 comments → M
-- Level ≥ 3 comments → S
+- Every normal level 1 comment starts a **primary spine** and renders at L.
+- The first visible child of a primary-spine comment continues that spine recursively and renders at L.
+- Off-spine level 2 comments render at M.
+- Off-spine level >= 3 comments render at S.
+- Synthetic promoted-link rows retain their separate defaults.
 
-Implementation uses a `$effect` keyed on `item.id` that clears `lodState` then walks `treeIndex.allIds` once, assigning M/S by level. Story navigation resets all LOD to the level-derived defaults.
+This exposes one leftmost reading path through each top-level discussion subtree. Because visible siblings retain HN's supplied order, the path follows the top-ranked continuation available to the renderer. A first child whose parent is off the primary spine does not render at L merely because it is first, which prevents systematically expanded comments from appearing beneath compressed parents.
+
+```txt
+Story
+|- A          L  top-level spine root
+|  |- A1      L  first child continues the spine
+|  |  |- A1a  L  first child continues the spine
+|  |  `- A1b  S  off-spine at level 3
+|  `- A2      M  off-spine at level 2
+|     `- A2a  S  parent is off-spine
+`- B          L  another top-level spine root
+   `- B1      L  first child continues the spine
+```
+
+The tree index classifies primary-spine ids in depth-first pre-order, where every parent is visited before its children. Implementation uses a `$effect` keyed on `item.id` that clears `lodState`, then applies the position-derived defaults across `treeIndex.allIds`. Story navigation resets all LOD to these defaults.
 
 ```ts
 $effect(() => {
 	const _ = item.id; // track
 	lodState.clear();
-	const mIds: number[] = [];
-	const sIds: number[] = [];
-	for (const id of treeIndex.allIds) {
-		const level = treeIndex.levelOf.get(id) ?? 0;
-		if (level === 2) mIds.push(id);
-		else if (level >= 3) sIds.push(id);
-	}
-	setLOD(mIds, 'M');
-	setLOD(sIds, 'S');
+	applyDefaultPolicy(false);
 });
 ```
 
@@ -307,11 +315,11 @@ Status: **5.1 and 5.2 shipped**; **5.3 (dev UI removal) pending**.
 
 **Per L row** (inline in meta, order: Expand direct replies, Ungroup, Expand):
 
-| #   | Label                     | Type   | Function                                                                                                                                                                                                                                                                              |
-| --- | ------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| B1  | **Expand direct replies** | toggle | Active when all direct children are at L. Toggle: if any direct child at M, `setLOD(directChildrenOf(id), 'L')`; else `setLOD(directChildrenOf(id), 'M')`. On ≤480px viewports the label drops "direct " via CSS (aria-label keeps the full phrase).                                  |
-| B3  | **Ungroup**               | toggle | Active when no descendants are at S. Toggle: if any descendant at S, promote those S's to M; else `applyDefaultPolicy(false, descendantsOf(id))` (strips return within scope). Disabled when A1 on.                                                                                   |
-| B2  | **Expand**                | toggle | Active when all descendants are at L. Toggle: if any descendant is non-L, `setLOD(descendantsOf(id), 'L')`; else `applyDefaultPolicy(false, descendantsOf(id))` (collapse restores default strips — this way un-toggling Expand also un-toggles Ungroup in a single "reset" gesture). |
+| #   | Label                     | Type   | Function                                                                                                                                                                                                                                                                                             |
+| --- | ------------------------- | ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| B1  | **Expand direct replies** | toggle | Active when all direct children are at L. Toggle: if any direct child at M, `setLOD(directChildrenOf(id), 'L')`; else `setLOD(directChildrenOf(id), 'M')`. On ≤480px viewports the label drops "direct " via CSS (aria-label keeps the full phrase).                                                 |
+| B3  | **Ungroup**               | toggle | Active when no descendants are at S. Toggle: if any descendant at S, promote those S's to M; else `applyDefaultPolicy(false, descendantsOf(id))` (strips return within scope). Disabled when A1 on.                                                                                                  |
+| B2  | **Expand**                | toggle | Active when all descendants are at L. Toggle: if any descendant is non-L, `setLOD(descendantsOf(id), 'L')`; else `applyDefaultPolicy(false, descendantsOf(id))` (collapse restores the primary spine and default strips, so un-toggling Expand also un-toggles Ungroup in a single "reset" gesture). |
 
 Active state is indicated by an inset box-shadow + slightly darker border, not a colored fill — conveys "pressed" without introducing a new visual weight.
 
