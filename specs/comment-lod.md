@@ -303,7 +303,7 @@ Status: **5.1 through 5.3 shipped**; **5.4 (dev UI removal) pending**.
 - **Global toolbar** sits next to the back button for thread-wide actions, right-aligned in the nav row.
 - **Current comment**: clicking an L or M row toggles only that comment between L and M.
 - **Three descendant scopes**: `Replies` is direct children, `Thread` is the literal first-ranked-child path, and `Tree` is every descendant. All scopes exclude the current comment.
-- **Direct targets, not toggles**: each scope exposes S, M, and L. Clicking a target applies that LOD to every comment in scope; it never resets the scope to policy.
+- **Direct targets plus a cycle**: each scope exposes S, M, and L. Clicking a target applies that LOD to every comment in scope; it never resets the scope to policy. Clicking the scope label cycles a uniform scope L -> S -> M -> L; a mixed scope resolves to L. The label includes the number of comments in scope.
 - **M remains compact**: descendant controls are available only after expanding the row to L. This is deliberate on touch devices, where hover cannot reveal controls without permanently consuming row space.
 
 #### Button inventory
@@ -324,6 +324,7 @@ Status: **5.1 through 5.3 shipped**; **5.4 (dev UI removal) pending**.
 | **Tree**    | `descendantsOf(id)`    | S, M, L for all descendants.                                   |
 
 Every target directly calls `setLOD(selector, target)`. A target is active only when every member of its non-empty scope already resolves to that LOD.
+The scope label is also a button that cycles the entire scope L -> S -> M -> L and displays its member count.
 
 Active state is indicated by an inset box-shadow + slightly darker border, not a colored fill — conveys "pressed" without introducing a new visual weight.
 

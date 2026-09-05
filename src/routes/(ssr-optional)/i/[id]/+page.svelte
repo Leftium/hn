@@ -1758,6 +1758,13 @@
 		if (ids.length > 0) setLOD(ids, lod);
 	}
 
+	// Cycle an entire scope L -> S -> M -> L. A mixed scope resolves to L so a
+	// single click always produces a uniform result.
+	function onCycleScopeLOD(id: number, scope: LODScope): void {
+		const next = scopeAllAt(id, scope, 'L') ? 'S' : scopeAllAt(id, scope, 'S') ? 'M' : 'L';
+		onSetScopeLOD(id, scope, next);
+	}
+
 	// Keyboard handler for row click-toggle. Enter/Space activate L↔M.
 	// preventDefault on Space so it doesn't scroll the page.
 	function onRowKeydown(e: KeyboardEvent, id: number, lod: 'L' | 'M' | 'S'): void {
@@ -2455,9 +2462,29 @@
 					{/if}
 					<s-lod-actions role="group" aria-label="Comment descendant detail">
 						{#each lodScopes as { label, scope }}
-							{@const available = scopeIds(comment.id, scope).length > 0}
+							{@const ids = scopeIds(comment.id, scope)}
+							{@const available = ids.length > 0}
 							<s-lod-scope role="group" aria-label={label}>
-								<s-lod-scope-label>{label}</s-lod-scope-label>
+								<button
+									type="button"
+									class="lod-scope-cycle"
+									aria-label="Cycle {label.toLowerCase()} detail for {ids.length} comments"
+									disabled={!available}
+									title="Cycle {label.toLowerCase()} detail for {ids.length} comments: L, S, M"
+									onclick={async (e) => {
+										e.stopPropagation();
+										const anchor = (e.currentTarget as HTMLElement).closest(
+											'd-comment'
+										) as HTMLElement | null;
+										const rectBefore = anchor?.getBoundingClientRect();
+										const snap = snapshotLayout();
+										onCycleScopeLOD(comment.id, scope);
+										await animateLayoutChange(snap, anchor, rectBefore);
+									}}
+								>
+									{label}
+									{ids.length}
+								</button>
 								{#each lodLevels as target}
 									<button
 										type="button"
@@ -3721,10 +3748,22 @@
 		align-items: center;
 	}
 
-	s-lod-scope-label {
+	.lod-scope-cycle {
+		--_btn-padding-v: 0;
+		--_btn-padding-h: var(--size-2);
+
+		border: 0;
 		padding-inline: var(--size-2);
 		font-size: var(--font-size-0);
+		line-height: 1.6;
 		color: light-dark(#666, #aaa);
+		background: light-dark(#f5f5f5, #2a2a2a);
+		box-shadow: inset -1px 0 light-dark(#ccc, #444);
+
+		&:hover:not(:disabled) {
+			color: light-dark(#333, #ddd);
+			background: light-dark(#e0e0e0, #383838);
+		}
 	}
 
 	s-author-actions {
