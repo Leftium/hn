@@ -1753,9 +1753,9 @@
 		return ids.length > 0 && ids.every((commentId) => getEffectiveLODById(commentId) === lod);
 	}
 
-	function onSetScopeLOD(id: number, scope: LODScope, lod: LOD): void {
+	function onSetScopeLOD(id: number, scope: LODScope, lod: LOD, includeSelf = false): void {
 		const ids = scopeIds(id, scope);
-		if (ids.length > 0) setLOD(ids, lod);
+		if (ids.length > 0) setLOD(includeSelf ? [id, ...ids] : ids, lod);
 	}
 
 	// Cycle an entire scope L -> S -> M -> L. A mixed scope resolves to L so a
@@ -2422,8 +2422,8 @@
 			<!--
 				L/M row structure: [meta-info] [body] [dev-ui]. Three siblings in one
 				fixed DOM order. CSS re-arranges per LOD:
-				  - L: grid with body above a [meta-info | dev-ui] row
-				  - M: flex-row with body flex-growing between meta-info and dev-ui
+				  - L: grid with [meta-info | actions] above the body
+				  - M: flex-row with body flex-growing after meta-info
 			-->
 			<d-comment-meta>
 				<s-level style:color={LEVEL_COLORS[colorIndex]}>{level - 1}</s-level>
@@ -2460,6 +2460,8 @@
 					{#if !isSynthetic && !isDead && !isDeleted && comment.user}
 						{@render authorPromotionActions(comment.user)}
 					{/if}
+				{/if}
+				{#if lod === 'L' || lod === 'M'}
 					<s-lod-actions role="group" aria-label="Comment descendant detail">
 						{#each lodScopes as { label, scope }}
 							{@const ids = scopeIds(comment.id, scope)}
@@ -2501,7 +2503,7 @@
 											) as HTMLElement | null;
 											const rectBefore = anchor?.getBoundingClientRect();
 											const snap = snapshotLayout();
-											onSetScopeLOD(comment.id, scope, target);
+											onSetScopeLOD(comment.id, scope, target, lod === 'M' && target === 'L');
 											await animateLayoutChange(snap, anchor, rectBefore);
 										}}
 									>
@@ -3732,9 +3734,8 @@
 		}
 	}
 
-	/* Per-L scope controls. The meta row wraps them rather than overflowing.
-	   They remain L-only: M rows can be expanded first, which keeps touch views
-	   compact without a hover-only action surface. */
+	/* Scope controls live inline on L rows. On desktop M rows, they appear only
+	   while hovered or focused; touch users expand M to L first. */
 	s-lod-actions {
 		display: inline-flex;
 		flex-wrap: wrap;
@@ -3763,6 +3764,22 @@
 		&:hover:not(:disabled) {
 			color: light-dark(#333, #ddd);
 			background: light-dark(#e0e0e0, #383838);
+		}
+	}
+
+	d-comment[data-lod='M'] s-lod-actions {
+		display: none;
+	}
+
+	@media (hover: hover) {
+		d-comment[data-lod='M']:is(:hover, :focus-within) s-lod-actions {
+			display: inline-flex;
+			position: absolute;
+			inset-inline-end: var(--size-2);
+			top: 50%;
+			z-index: 2;
+			margin-inline-start: 0;
+			transform: translateY(-50%);
 		}
 	}
 
@@ -4082,7 +4099,7 @@
 
 	d-comment {
 		/*
-			Default layout (L): grid with body on top, meta-info below. Dev UI,
+			Default layout (L): grid with meta-info on top, body below. Dev UI,
 			when enabled (?dev=1), is absolute-positioned at the viewport-left
 			gutter and sits outside grid flow. Three children in fixed DOM order:
 			  <d-comment-meta>  → area "meta"
@@ -4095,8 +4112,8 @@
 		display: grid;
 		grid-template-columns: 1fr;
 		grid-template-areas:
-			'body'
-			'meta';
+			'meta'
+			'body';
 		column-gap: var(--size-2);
 		row-gap: var(--size-1);
 		padding: var(--size-2) var(--size-2) var(--size-2)
@@ -4148,8 +4165,8 @@
 			filter: none;
 			grid-template-areas:
 				'tooltip'
-				'body'
-				'meta';
+				'meta'
+				'body';
 
 			s-guideline-tooltip {
 				display: block;

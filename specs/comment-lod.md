@@ -133,7 +133,7 @@ Each comment renders as an independent row, indented by level. A comment's LOD i
 
 ### Row layout
 
-**L rows — meta below body.** The metadata strip (level badge, author, time, OP/NEW badges, LOD toggle buttons) renders **below** the comment body. Rationale: after reading a multi-line comment the user's eye lands near the bottom of the row, so placing interaction controls there shortens travel distance to the most common action (toggling LOD).
+**L rows — meta above body.** The metadata strip (level badge, author, time, OP/NEW badges, LOD controls) renders **above** the comment body. This keeps the controls in the same visual region when an M row expands to L and makes the reading actions available before the body.
 
 **M rows — single line, meta first.** Because M is a single truncated line, the body cannot share vertical space with a separate meta row without doubling row height. Instead, M renders meta **first** on the line (level badge, author, time, badges), then the body, which flex-grows and ellipsis-truncates to fill remaining space. This matches familiar folded-comment conventions (author/time prefix + preview text) and lets the eye scan meta columns consistently across runs of M rows. The body uses a smaller font (`--font-size-0`, matching the meta row) so more preview text fits per line. Dev UI is absolutely positioned at the right edge and takes no horizontal layout space — body ellipsis extends to the padding edge.
 
@@ -298,13 +298,13 @@ Status: **5.1 through 5.3 shipped**; **5.4 (dev UI removal) pending**.
 
 #### Design principles
 
-- **M and S are tight** — too cramped for per-row buttons. Their only production affordance is click-to-toggle (Phase 4): click M → L, click strip → all-M.
-- **L has room** — per-row action buttons live on L rows only, inline in the meta line (which sits at the bottom of the row).
+- **M and S are tight** — M avoids permanent controls: click it to expand, or use its desktop hover rail. S remains strip-only: click a strip to reveal its members at M.
+- **L has room** — per-row action buttons live inline in the L-row meta line above the body.
 - **Global toolbar** sits next to the back button for thread-wide actions, right-aligned in the nav row.
 - **Current comment**: clicking an L or M row toggles only that comment between L and M.
 - **Three descendant scopes**: `Replies` is direct children, `Thread` is the literal first-ranked-child path, and `Tree` is every descendant. All scopes exclude the current comment.
 - **Direct targets plus a cycle**: each scope exposes S, M, and L. Clicking a target applies that LOD to every comment in scope; it never resets the scope to policy. Clicking the scope label cycles a uniform scope L -> S -> M -> L; a mixed scope resolves to L. The label includes the number of comments in scope.
-- **M remains compact**: descendant controls are available only after expanding the row to L. This is deliberate on touch devices, where hover cannot reveal controls without permanently consuming row space.
+- **M remains compact**: on desktop hover-capable pointers, descendant controls appear as a right-aligned overlay while an M row is hovered or focused, without changing its layout. Selecting L from this overlay also expands the current comment. On touch, M remains compact and must be expanded to L before its controls are available.
 
 #### Button inventory
 
