@@ -1,6 +1,6 @@
 # Spec: Selective Comment LOD (Level of Detail) Rendering
 
-**Status:** Phases 1–4 complete; Phase 5 (production UX actions, dev-UI removal) pending
+**Status:** Phases 1–4 complete; Phase 5 in progress (production controls shipped, dev-UI removal pending). Automatic spine expansion is temporarily disabled.
 **Replaces:** current `collapsedIds` / `microCollapsedIds` / `autoGroupedIds` / `threadChildIds` system in `src/routes/i/[id]/+page.svelte`
 
 ## Motivation
@@ -40,7 +40,8 @@ let lodState = $state<Map<number, 'L' | 'M' | 'S'>>(new Map());
 - Key: comment id (post id also valid)
 - Missing key ⇒ default `'L'`
 - Every comment has exactly one LOD at any time (no overlapping sets)
-- No map-size optimization: entries are set regardless of whether the value matches the default. Keeps `setLOD` branch-free and the map is small enough (≤ comment count) that it's a non-issue. In practice the default-L state will only exist briefly after load before Phase 4 initialization applies M/S to most comments.
+- No map-size optimization: entries are set regardless of whether the value matches the default. The map is small enough (≤ comment count) that explicit entries keep inspection straightforward.
+- A separate `defaultManagedLodIds` set records provenance, not render state. Policy-owned entries are recalculated when the ranked tree changes; user-modified entries are preserved.
 
 Derived helper:
 
@@ -97,6 +98,7 @@ self(id); // [id]
 ancestorsOf(id); // [parent, grandparent, ..., post]
 parentOf(id); // [parent] or []
 childrenOf(id); // direct children
+spineOf(id); // literal first-ranked-child path below id
 descendantsOf(id); // all descendants (excl. self)
 subtreeOf(id); // [id, ...descendants]
 siblingsOf(id); // same-parent comments, excl. self
@@ -255,27 +257,26 @@ Rationale: the legacy logic was ~700 lines entangled across state, template, and
 
 On item load (and on navigation between items):
 
-- Every normal level 1 comment starts a **primary spine** and renders at L.
-- The first visible child of a primary-spine comment continues that spine recursively and renders at L.
-- Off-spine level 2 comments render at M.
-- Off-spine level >= 3 comments render at S.
+- Every normal level 1 comment renders at L.
+- Level 2 comments render at M.
+- Level >= 3 comments render at S.
 - Synthetic promoted-link rows retain their separate defaults.
 
-This exposes one leftmost reading path through each top-level discussion subtree. Because visible siblings retain HN's supplied order, the path follows the top-ranked continuation available to the renderer. A first child whose parent is off the primary spine does not render at L merely because it is first, which prevents systematically expanded comments from appearing beneath compressed parents.
+Automatic primary-spine expansion is temporarily disabled while the manual spine controls are evaluated. The tree index still exposes the literal ranked spine for those controls.
 
 ```txt
 Story
-|- A          L  top-level spine root
-|  |- A1      L  first child continues the spine
-|  |  |- A1a  L  first child continues the spine
-|  |  `- A1b  S  off-spine at level 3
-|  `- A2      M  off-spine at level 2
-|     `- A2a  S  parent is off-spine
-`- B          L  another top-level spine root
-   `- B1      L  first child continues the spine
+|- A          L  top-level
+|  |- A1      M  level 2
+|  |  |- A1a  S  level 3
+|  |  `- A1b  S  level 3
+|  `- A2      M  level 2
+|     `- A2a  S  level 3
+`- B          L  top-level
+   `- B1      M  level 2
 ```
 
-The tree index classifies primary-spine ids in depth-first pre-order, where every parent is visited before its children. Implementation uses a `$effect` keyed on `item.id` that clears `lodState`, then applies the position-derived defaults across `treeIndex.allIds`. Story navigation resets all LOD to these defaults.
+`spineOf()` derives the ranked path from the tree index's current `childrenOf()` order. A `$effect` keyed on `item.id` clears `lodState`, then applies the position-derived defaults across `treeIndex.allIds`. Story navigation resets all LOD to these defaults.
 
 ```ts
 $effect(() => {
@@ -287,71 +288,68 @@ $effect(() => {
 
 `allIds` from the tree index is preferred over the selector `allComments()` here because the effect runs before user interaction, avoiding an extra round-trip through the selector layer. Selectors remain the primary interface for Phase 5 actions.
 
+The fast HNPWA preview and Firebase can expose different ranked child orders. Default-policy writes add ids to `defaultManagedLodIds`; direct row, strip, and bulk writes remove them. When the tree changes during hydration, policy-owned and newly discovered ids are recalculated against the current `childrenOf` order while user-modified ids retain their selected LOD.
+
 ### Phase 5: Production UX actions
 
 Dev UI (`?dev=1`) is replaced by production controls. All actions compose `setLOD` with selectors.
 
-Status: **5.1 and 5.2 shipped**; **5.3 (dev UI removal) pending**.
+Status: **5.1 through 5.3 shipped**; **5.4 (dev UI removal) pending**.
 
 #### Design principles
 
 - **M and S are tight** — too cramped for per-row buttons. Their only production affordance is click-to-toggle (Phase 4): click M → L, click strip → all-M.
 - **L has room** — per-row action buttons live on L rows only, inline in the meta line (which sits at the bottom of the row).
 - **Global toolbar** sits next to the back button for thread-wide actions, right-aligned in the nav row.
-- **Two orthogonal axes**:
-  - _Depth_ (inclusion): S ↔ M — are buried comments rendered at all? "Ungroup" actions operate here.
-  - _Detail_ (elaboration): M ↔ L — are rendered comments truncated or full? "Expand" actions operate here.
-- **Heuristic toggles**: toggle state is derived from current `lodState`, not stored separately. Active/inactive is a `$derived` computation over the scope's current LODs. No snapshot infrastructure.
-- **Clicks never collapse to S** — reserved for explicit button actions and future collapse gestures.
+- **Current comment**: clicking an L or M row toggles only that comment between L and M.
+- **Three descendant scopes**: `Replies` is direct children, `Thread` is the literal first-ranked-child path, and `Tree` is every descendant. All scopes exclude the current comment.
+- **Direct targets, not toggles**: each scope exposes S, M, and L. Clicking a target applies that LOD to every comment in scope; it never resets the scope to policy.
+- **M remains compact**: descendant controls are available only after expanding the row to L. This is deliberate on touch devices, where hover cannot reveal controls without permanently consuming row space.
 
 #### Button inventory
 
 **Global toolbar** (right side of nav row, order: Ungroup before Expand):
 
-| #   | Label           | Type   | Function                                                                                                                                                                                                                                              |
-| --- | --------------- | ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| A2  | **Ungroup all** | toggle | Active when no comments are at S (and `ungroupAllFlag === true`). Active → inactive: clear flag, `lodState.clear()`, re-apply default policy (strips regenerate). Inactive → active: set flag, `setLOD(allStripMembers(), 'M')`. Disabled when A1 on. |
-| A1  | **Expand all**  | toggle | Active when all comments are at L. Active → inactive: `lodState.clear()`, re-apply default policy. Inactive → active: `setLOD(allComments(), 'L')`. Always clears `ungroupAllFlag` (view reset).                                                      |
+| #   | Label           | Type   | Function                                                                                                                                                                                                                                           |
+| --- | --------------- | ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A2  | **Ungroup all** | toggle | Active when no comments are at S (and `ungroupAllFlag === true`). Active → inactive: clear flag, clear LOD state, re-apply default policy (strips regenerate). Inactive → active: set flag, `setLOD(allStripMembers(), 'M')`. Disabled when A1 on. |
+| A1  | **Expand all**  | toggle | Active when all comments are at L. Active → inactive: clear LOD state, re-apply default policy. Inactive → active: `setLOD(allComments(), 'L')`. Always clears `ungroupAllFlag` (view reset).                                                      |
 
-**Per L row** (inline in meta, order: Expand direct replies, Ungroup, Expand):
+**Per L row** (inline in meta, ordered from narrowest to broadest scope):
 
-| #   | Label                     | Type   | Function                                                                                                                                                                                                                                                                                             |
-| --- | ------------------------- | ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| B1  | **Expand direct replies** | toggle | Active when all direct children are at L. Toggle: if any direct child at M, `setLOD(directChildrenOf(id), 'L')`; else `setLOD(directChildrenOf(id), 'M')`. On ≤480px viewports the label drops "direct " via CSS (aria-label keeps the full phrase).                                                 |
-| B3  | **Ungroup**               | toggle | Active when no descendants are at S. Toggle: if any descendant at S, promote those S's to M; else `applyDefaultPolicy(false, descendantsOf(id))` (strips return within scope). Disabled when A1 on.                                                                                                  |
-| B2  | **Expand**                | toggle | Active when all descendants are at L. Toggle: if any descendant is non-L, `setLOD(descendantsOf(id), 'L')`; else `applyDefaultPolicy(false, descendantsOf(id))` (collapse restores the primary spine and default strips, so un-toggling Expand also un-toggles Ungroup in a single "reset" gesture). |
+| Scope       | Selector               | Targets                                                        |
+| ----------- | ---------------------- | -------------------------------------------------------------- |
+| **Replies** | `directChildrenOf(id)` | S, M, L for direct replies only.                               |
+| **Thread**  | `spineOf(id)`          | S, M, L for the literal first-ranked-child path below the row. |
+| **Tree**    | `descendantsOf(id)`    | S, M, L for all descendants.                                   |
+
+Every target directly calls `setLOD(selector, target)`. A target is active only when every member of its non-empty scope already resolves to that LOD.
 
 Active state is indicated by an inset box-shadow + slightly darker border, not a colored fill — conveys "pressed" without introducing a new visual weight.
 
 #### State model
 
-No snapshots. Toggle active-state is derived from `lodState`:
+No snapshots. Target active-state is derived from effective LOD:
 
 - A1 active: `allComments().every(id => getLOD(id) === 'L')`
 - A2 active: `ungroupAllFlag && allComments().every(id => getLOD(id) !== 'S')`
-- B1 active: `directChildrenOf(id).every(c => getLOD(c) === 'L')` (when non-empty)
-- B2 active: `descendantsOf(id).every(d => getLOD(d) === 'L')` (when non-empty)
-- B3 active: `descendantsOf(id).every(d => getLOD(d) !== 'S')` (when non-empty)
+- For scope X and target T: `X.every(id => getLOD(id) === T)` (when non-empty)
 
 One piece of additional state:
 
 - **`ungroupAllFlag: boolean`** — forward-policy override for A2. While true, default LOD policy produces M (not S) for would-be strip members. Cleared when A2 toggles off and when A1 toggles (either direction), and reset to `false` on item navigation.
 
-B3 has no forward-policy override — per-L ungroup is state-free. New comments arriving into a B3-ungrouped subtree follow default policy (may appear as S).
-
-**Trade-off accepted**: heuristic toggles don't preserve side-edits made during a "peek." If the user ungroups-all, clicks a revealed M comment to L, then un-ungroups, the L reverts to whatever default policy says (likely S). Un-toggling is a "clear the peek" gesture; losing in-peek edits is acceptable.
-
 **Implementation note — effect subscription hazard**: `applyDefaultPolicy()` takes `ungroup` as an **explicit parameter** rather than reading `ungroupAllFlag` directly. The init `$effect` (runs on `item.id` change) calls `applyDefaultPolicy(false)` so it never subscribes to the flag. If it read the flag instead, flipping A2 would re-trigger the effect, reset the flag to `false`, and clobber the handler's S→M writes. Keeping the flag out of any effect's reactive closure is required.
 
 #### Button enablement rules
 
-| Button | Disabled when                    |
-| ------ | -------------------------------- |
-| A1     | never                            |
-| A2     | A1 is on                         |
-| B1     | scope empty (no direct children) |
-| B2     | scope empty (no descendants)     |
-| B3     | A1 is on, or scope empty         |
+| Button  | Disabled when                    |
+| ------- | -------------------------------- |
+| A1      | never                            |
+| A2      | A1 is on                         |
+| Replies | scope empty (no direct children) |
+| Thread  | scope empty                      |
+| Tree    | scope empty (no descendants)     |
 
 Disable (dim, preserve layout) rather than hide.
 
@@ -360,7 +358,8 @@ Disable (dim, preserve layout) rather than hide.
 Used by Phase 5:
 
 - `childrenOf(id)` — immediate children (Phase 3).
-- `directChildrenOf(id)` — spec-named alias of `childrenOf` for B1 (Phase 5.2).
+- `directChildrenOf(id)` — spec-named alias of `childrenOf` for the Replies scope (Phase 5.2).
+- `spineOf(id)` - the literal first-ranked-child path below `id`, excluding `id` itself (Phase 5.3).
 - `descendantsOf(id)` — whole subtree excluding self (Phase 3).
 - `allComments()` — every visible comment in tree order (Phase 3).
 - `allStripMembers()` — every comment currently at S (Phase 5.1, used by A2).
@@ -371,22 +370,21 @@ Click-highlight (Phase 4) remains reserved for explicit click-toggle on rows and
 
 #### Keyboard / ARIA
 
-Rows use `tabindex="0"` + `onkeydown` (Enter/Space → L↔M toggle). We deliberately do **not** add `role="button"` on `<d-comment>` — nimble.css styles every `[role="button"]` as a full pill (background, border-radius, `text-align: center`, padding), which cannot be opted out of without heavy overrides. AT users still have the explicit B1–B3 buttons on every L row. The three `svelte-ignore` comments (`a11y_click_events_have_key_events`, `a11y_no_static_element_interactions`, `a11y_no_noninteractive_tabindex`) acknowledge this deliberate tradeoff.
+Rows use `tabindex="0"` + `onkeydown` (Enter/Space → L↔M toggle). We deliberately do **not** add `role="button"` on `<d-comment>` — nimble.css styles every `[role="button"]` as a full pill (background, border-radius, `text-align: center`, padding), which cannot be opted out of without heavy overrides. AT users can expand an M row to L, then use the explicit Replies, Thread, and Tree buttons. The three `svelte-ignore` comments (`a11y_click_events_have_key_events`, `a11y_no_static_element_interactions`, `a11y_no_noninteractive_tabindex`) acknowledge this deliberate tradeoff.
 
-All B-buttons call `e.stopPropagation()` so clicking them doesn't trigger the row's L↔M toggle.
+All scope buttons call `e.stopPropagation()` so clicking them doesn't trigger the row's L↔M toggle.
 
 #### Implementation order and status
 
 1. ✅ **5.1 — Global toolbar** (commit `fe9948a`): A1 (Expand all), A2 (Ungroup all). Adds `ungroupAllFlag` + extracts `applyDefaultPolicy(ungroup, ids?)` from the init effect. Adds `allStripMembers()` selector.
-2. ✅ **5.2 — L row actions**: B1 (Expand direct replies), B3 (Ungroup), B2 (Expand). Adds `directChildrenOf(id)` selector. Inline in meta line; active-state via inset shadow. Responsive label trimming for B1 on ≤480px. Row keyboard/ARIA established.
-3. ⬜ **5.3 — Dev UI removal**: pending. Remove `<s-lod-dev>` blocks and CSS; `?dev=1` gate + `data-index-level`; `s-solo` mode + `?group=0`; `window.__lod` debug handle.
+2. ✅ **5.2 — Scope targets**: Replies, Thread, and Tree each expose direct S/M/L targets. The current row retains click-to-toggle L/M. Adds `directChildrenOf(id)`, `spineOf(id)`, and scoped target helpers. Per-row controls remain L-only for touch ergonomics.
+3. ✅ **5.3 — Hydration-safe policy**: Refreshes policy-owned LOD after hydration reorders the tree. Automatic spine expansion is temporarily disabled while the scoped controls are evaluated.
+4. ⬜ **5.4 — Dev UI removal**: pending. Remove `<s-lod-dev>` blocks and CSS; `?dev=1` gate + `data-index-level`; `s-solo` mode + `?group=0`; `window.__lod` debug handle.
 
 #### Deviations from original spec
 
 - **B4 "Focus subtree" dropped**: was planned as a one-shot to collapse everything outside the ancestor/self/descendant chain to S. Removed during 5.2 review; `complementOf` selector and `alreadyFocused` helper removed along with it. Can re-introduce if usage demands.
-- **Button labels**: per-row B2 became "Expand" (dropped "subtree" as redundant in-context); B3 became "Ungroup" (ditto). Toolbar kept "Expand all" / "Ungroup all" since "all" is the scope.
-- **Button order**: per-row order is B1, B3, B2 (Expand direct replies, Ungroup, Expand) — B1 first because it's the most common intent; Ungroup before Expand because increasing depth usually precedes reading more detail. Toolbar order matches: Ungroup all before Expand all.
-- **B2 collapse semantics**: originally spec'd as a pure L↔M toggle. Shipped with a "reset this scope" twist — collapsing from all-L re-applies default policy, so clicking B2 also un-toggles B3. Preserves the heuristic-toggle principle (one click, one obvious result).
+- **Per-row labels and behavior**: replaced the heuristic Ungroup/Expand and temporary Spine M/L controls with Replies, Thread, and Tree direct S/M/L targets. This makes scope and target explicit and permits collapsing a thread to S.
 - **Active styling**: spec called for "pressed/active" styling without specifying color. Shipped with inset shadow + darker border — an earlier attempt with a colored fill (orange, then dark gray) was too jarring against the neutral comment palette.
 
 ## Invariants

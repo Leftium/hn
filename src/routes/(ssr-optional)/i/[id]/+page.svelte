@@ -620,6 +620,14 @@
 	// Post id may be written freely; the renderer never reads the post's entry.
 	// SvelteMap so per-id mutations (setLOD in Phase 3) trigger fine-grained rerenders.
 	const lodState = new SvelteMap<number, LOD>();
+	// Tracks which entries still reflect automatic policy rather than user action.
+	// These entries may be recomputed when Firebase changes the ranked tree order.
+	const defaultManagedLodIds = new Set<number>();
+
+	function clearLODState(): void {
+		lodState.clear();
+		defaultManagedLodIds.clear();
+	}
 	function readAuthorPromotions(params: URLSearchParams): [string, AuthorPromotion][] {
 		const promotions: [string, AuthorPromotion][] = [];
 		for (const [name, username] of params) {
@@ -710,7 +718,6 @@
 		commentById: SvelteMap<number, RenderHNItem>;
 		allIds: number[]; // every visible comment id in depth-first pre-order (excludes post)
 		positionOf: SvelteMap<number, number>; // comment id → index in allIds
-		primarySpineIds: ReadonlySet<number>; // normal top-level comments + recursive first-child paths
 	}
 
 	const treeIndex = $derived.by<TreeIndex>(() => {
@@ -740,28 +747,6 @@
 		}
 		if (displayTree) walk(displayTree.comments, displayTree.id, 1);
 
-		// Each normal top-level comment starts a primary spine. A deeper comment
-		// joins that spine only when its parent is already on it and the comment is
-		// the parent's first visible child. Since allIds is pre-order, parents are
-		// always classified before their children.
-		const primarySpineIds = new Set<number>();
-		for (const id of allIds) {
-			if (promotedRoleOf.has(id)) continue;
-			const level = levelOf.get(id) ?? 0;
-			if (level === 1) {
-				primarySpineIds.add(id);
-				continue;
-			}
-			const parentId = parentOf.get(id);
-			if (
-				parentId !== undefined &&
-				primarySpineIds.has(parentId) &&
-				childrenOf.get(parentId)?.[0] === id
-			) {
-				primarySpineIds.add(id);
-			}
-		}
-
 		return {
 			parentOf,
 			childrenOf,
@@ -769,8 +754,7 @@
 			promotedRoleOf,
 			commentById,
 			allIds,
-			positionOf,
-			primarySpineIds
+			positionOf
 		};
 	});
 	const activityBuckets = $derived.by(() => {
@@ -1021,14 +1005,18 @@
 	}
 
 	// --- LOD primitives ---
-	// setLOD writes uniformly for all ids (no default-cleanup, no special cases).
+	// setLOD marks every written id as a user-owned choice, with no special cases.
 	// Post id may be written freely; the renderer never reads the post's entry.
 	function setLOD(ids: Iterable<number>, lod: LOD): void {
-		for (const id of ids) lodState.set(id, lod);
+		for (const id of ids) {
+			defaultManagedLodIds.delete(id);
+			lodState.set(id, lod);
+		}
 	}
 
 	// toggleLOD: with override, sets directly. Without, cycles L → M → S → L.
 	function toggleLOD(id: number, override?: LOD): void {
+		defaultManagedLodIds.delete(id);
 		if (override) {
 			lodState.set(id, override);
 			return;
@@ -1560,6 +1548,18 @@
 		return result;
 	}
 
+	// Literal first-ranked-child path below id. childrenOf preserves the current
+	// Firebase/HN display order and excludes hidden comments.
+	function spineOf(id: number): number[] {
+		const result: number[] = [];
+		let current = childrenOf(id)[0];
+		while (current !== undefined) {
+			result.push(current);
+			current = childrenOf(current)[0];
+		}
+		return result;
+	}
+
 	function subtreeOf(id: number): number[] {
 		return [id, ...descendantsOf(id)];
 	}
@@ -1598,9 +1598,9 @@
 	let ungroupAllFlag = $state(false);
 
 	// --- Phase 4/5: default initial LOD state by tree position ---
-	// Apply default LOD: L for every normal comment on a primary spine, M for
-	// remaining level-2 comments, and S (or M when ungroup is true) for
-	// remaining comments at level >= 3. Synthetic promoted rows retain their
+	// Apply default LOD: L for top-level comments, M for level-2 comments, and
+	// S (or M when ungroup is true) for comments at level >= 3. Automatic spine
+	// expansion is temporarily disabled. Synthetic promoted rows retain their
 	// special defaults. Does NOT clear lodState on its own; callers clear first
 	// when they want a reset.
 	// Scope: when ids is provided, only those ids receive default policy
@@ -1620,14 +1620,21 @@
 			const promotedRole = treeIndex.promotedRoleOf.get(id);
 			if (promotedRole === 'primary') M.push(id);
 			else if (promotedRole === 'alternate') S.push(id);
-			else if (lv <= 1 || treeIndex.primarySpineIds.has(id)) L.push(id);
+			else if (lv <= 1) L.push(id);
 			else if (lv === 2) M.push(id);
 			else if (ungroup) M.push(id);
 			else S.push(id);
 		}
-		setLOD(L, 'L');
-		setLOD(M, 'M');
-		setLOD(S, 'S');
+		for (const [bucket, lod] of [
+			[L, 'L'],
+			[M, 'M'],
+			[S, 'S']
+		] as const) {
+			for (const id of bucket) {
+				defaultManagedLodIds.add(id);
+				lodState.set(id, lod);
+			}
+		}
 	}
 
 	// Runs only when the item id changes. Resets any prior entries so manual
@@ -1637,7 +1644,7 @@
 		const id = displayItem?.id ?? null;
 		if (id === lodItemId) return;
 
-		lodState.clear();
+		clearLODState();
 		highlightedIds.clear();
 		navigationAnchorCommentId = null;
 		navigationAnchorOrigin = 'selection';
@@ -1651,13 +1658,17 @@
 		}
 	});
 
-	// As progressively loaded comments appear, default only the new ids. Existing
-	// ids keep user-selected LOD state across HNPWA/Firebase replacement and
-	// Firebase hydration.
+	// Reapply policy-owned entries when the ranked tree changes, while preserving
+	// entries changed by row, strip, and bulk controls. This keeps policy-owned
+	// entries consistent when Firebase reorders the HNPWA preview.
 	$effect(() => {
 		if (!displayItem) return;
-		const newIds = treeIndex.allIds.filter((id) => !lodState.has(id));
-		if (newIds.length > 0) applyDefaultPolicy(ungroupAllFlag, newIds);
+		const allIds = treeIndex.allIds;
+		const ungroup = ungroupAllFlag;
+		untrack(() => {
+			const policyIds = allIds.filter((id) => defaultManagedLodIds.has(id) || !lodState.has(id));
+			if (policyIds.length > 0) applyDefaultPolicy(ungroup, policyIds);
+		});
 	});
 
 	// --- Phase 5.1: global toolbar active-states + handlers ---
@@ -1681,7 +1692,7 @@
 	function onExpandAll(): void {
 		ungroupAllFlag = false;
 		if (allLActive) {
-			lodState.clear();
+			clearLODState();
 			applyDefaultPolicy(false);
 		} else {
 			setLOD(allComments(), 'L');
@@ -1692,7 +1703,7 @@
 	function onUngroupAll(): void {
 		if (ungroupAllActive) {
 			ungroupAllFlag = false;
-			lodState.clear();
+			clearLODState();
 			applyDefaultPolicy(false);
 		} else {
 			ungroupAllFlag = true;
@@ -1714,73 +1725,37 @@
 		navigationAnchorCommentId = null;
 		navigationAnchorOrigin = 'selection';
 		ungroupAllFlag = false;
-		lodState.clear();
+		clearLODState();
 		applyDefaultPolicy(false);
 		replaceViewUrl('', authorPromotions);
 	}
 
-	// --- Phase 5.2: per-L row action predicates + handlers ---
-	// These are plain functions (not $derived) called from the commentRow
-	// snippet. Effective LOD reads make them reactive on render.
-	// Returns false for empty scopes so "active" doesn't misreport on leaves.
-	function repliesAllL(id: number): boolean {
-		const kids = directChildrenOf(id);
-		if (kids.length === 0) return false;
-		for (const k of kids) if (getEffectiveLODById(k) !== 'L') return false;
-		return true;
-	}
-	function subtreeAllL(id: number): boolean {
-		const desc = descendantsOf(id);
-		if (desc.length === 0) return false;
-		for (const d of desc) if (getEffectiveLODById(d) !== 'L') return false;
-		return true;
-	}
-	function subtreeNoS(id: number): boolean {
-		const desc = descendantsOf(id);
-		if (desc.length === 0) return false;
-		for (const d of desc) if (getEffectiveLODById(d) === 'S') return false;
-		return true;
-	}
-	// B1 — Expand direct replies. Toggle L↔M on immediate children only.
-	function onExpandReplies(id: number): void {
-		const kids = directChildrenOf(id);
-		if (kids.length === 0) return;
-		const anyM = kids.some((k) => getEffectiveLODById(k) === 'M');
-		setLOD(kids, anyM ? 'L' : 'M');
+	// --- Phase 5.2: per-L row scope controls ---
+	// The current row controls its own L/M by clicking. These controls address
+	// only descendants: direct replies, the literal first-ranked thread, or all
+	// descendants in the tree.
+	type LODScope = 'replies' | 'thread' | 'tree';
+	const lodLevels: readonly LOD[] = ['S', 'M', 'L'];
+	const lodScopes: readonly { label: string; scope: LODScope }[] = [
+		{ label: 'Replies', scope: 'replies' },
+		{ label: 'Thread', scope: 'thread' },
+		{ label: 'Tree', scope: 'tree' }
+	];
+
+	function scopeIds(id: number, scope: LODScope): number[] {
+		if (scope === 'replies') return directChildrenOf(id);
+		if (scope === 'thread') return spineOf(id);
+		return descendantsOf(id);
 	}
 
-	// B2 — Expand subtree. Toggle: if any descendant is M or S, promote
-	// all to L; otherwise (all-L) collapse back to default policy (which
-	// re-introduces strips at level ≥ 3). This way untoggling Expand
-	// subtree also untoggles Ungroup subtree — a single "reset this
-	// scope" gesture.
-	function onExpandSubtree(id: number): void {
-		const desc = descendantsOf(id);
-		if (desc.length === 0) return;
-		const anyNonL = desc.some((d) => getEffectiveLODById(d) !== 'L');
-		if (anyNonL) setLOD(desc, 'L');
-		else applyDefaultPolicy(false, desc);
+	function scopeAllAt(id: number, scope: LODScope, lod: LOD): boolean {
+		const ids = scopeIds(id, scope);
+		return ids.length > 0 && ids.every((commentId) => getEffectiveLODById(commentId) === lod);
 	}
 
-	// B3 — Ungroup subtree. Toggle: if any descendant is S, promote those S
-	// to M; else re-apply default policy within the subtree (re-introducing
-	// strips per level ≥ 3). Per spec: no forward-policy override — this is
-	// a per-L, state-free action. New arrivals in the subtree follow default
-	// policy (may become S).
-	function onUngroupSubtree(id: number): void {
-		const desc = descendantsOf(id);
-		if (desc.length === 0) return;
-		const anyS = desc.some((d) => getEffectiveLODById(d) === 'S');
-		if (anyS) {
-			// Promote only the S descendants to M; leave existing L/M alone.
-			const toPromote = desc.filter((d) => getEffectiveLODById(d) === 'S');
-			setLOD(toPromote, 'M');
-		} else {
-			// Re-run default policy within the subtree (ungroup=false → strips
-			// reappear at level ≥ 3). Note: this overwrites any manual L/M
-			// edits inside the subtree — accepted as "reset the scope."
-			applyDefaultPolicy(false, desc);
-		}
+	function onSetScopeLOD(id: number, scope: LODScope, lod: LOD): void {
+		const ids = scopeIds(id, scope);
+		if (ids.length > 0) setLOD(ids, lod);
 	}
 
 	// Keyboard handler for row click-toggle. Enter/Space activate L↔M.
@@ -1909,6 +1884,7 @@
 			ancestorsOf: typeof ancestorsOf;
 			childrenOf: typeof childrenOf;
 			descendantsOf: typeof descendantsOf;
+			spineOf: typeof spineOf;
 			subtreeOf: typeof subtreeOf;
 			siblingsOf: typeof siblingsOf;
 			allComments: typeof allComments;
@@ -2201,6 +2177,7 @@
 			ancestorsOf,
 			childrenOf,
 			descendantsOf,
+			spineOf,
 			subtreeOf,
 			siblingsOf,
 			allComments
@@ -2476,73 +2453,36 @@
 					{#if !isSynthetic && !isDead && !isDeleted && comment.user}
 						{@render authorPromotionActions(comment.user)}
 					{/if}
-					{@const hasKids = directChildrenOf(comment.id).length > 0}
-					{@const hasDesc = descendantsOf(comment.id).length > 0}
-					{@const b1Active = hasKids && repliesAllL(comment.id)}
-					{@const b2Active = hasDesc && subtreeAllL(comment.id)}
-					{@const b3Active = hasDesc && subtreeNoS(comment.id)}
-					<s-lod-actions role="group" aria-label="Comment thread view">
-						<button
-							type="button"
-							class="lod-row-btn inline secondary"
-							class:active={b1Active}
-							aria-pressed={b1Active}
-							aria-label="Expand direct replies"
-							disabled={!hasKids}
-							title="Expand/collapse direct replies"
-							onclick={async (e) => {
-								e.stopPropagation();
-								const anchor = (e.currentTarget as HTMLElement).closest(
-									'd-comment'
-								) as HTMLElement | null;
-								const rectBefore = anchor?.getBoundingClientRect();
-								const snap = snapshotLayout();
-								onExpandReplies(comment.id);
-								await animateLayoutChange(snap, anchor, rectBefore);
-							}}
-						>
-							Expand&nbsp;<s-direct>direct&nbsp;</s-direct>replies
-						</button>
-						<button
-							type="button"
-							class="lod-row-btn inline secondary"
-							class:active={b3Active}
-							aria-pressed={b3Active}
-							disabled={!hasDesc || allLActive}
-							title="Ungroup/regroup subtree strips"
-							onclick={async (e) => {
-								e.stopPropagation();
-								const anchor = (e.currentTarget as HTMLElement).closest(
-									'd-comment'
-								) as HTMLElement | null;
-								const rectBefore = anchor?.getBoundingClientRect();
-								const snap = snapshotLayout();
-								onUngroupSubtree(comment.id);
-								await animateLayoutChange(snap, anchor, rectBefore);
-							}}
-						>
-							Ungroup
-						</button>
-						<button
-							type="button"
-							class="lod-row-btn inline secondary"
-							class:active={b2Active}
-							aria-pressed={b2Active}
-							disabled={!hasDesc}
-							title="Expand/collapse entire subtree"
-							onclick={async (e) => {
-								e.stopPropagation();
-								const anchor = (e.currentTarget as HTMLElement).closest(
-									'd-comment'
-								) as HTMLElement | null;
-								const rectBefore = anchor?.getBoundingClientRect();
-								const snap = snapshotLayout();
-								onExpandSubtree(comment.id);
-								await animateLayoutChange(snap, anchor, rectBefore);
-							}}
-						>
-							Expand
-						</button>
+					<s-lod-actions role="group" aria-label="Comment descendant detail">
+						{#each lodScopes as { label, scope }}
+							{@const available = scopeIds(comment.id, scope).length > 0}
+							<s-lod-scope role="group" aria-label={label}>
+								<s-lod-scope-label>{label}</s-lod-scope-label>
+								{#each lodLevels as target}
+									<button
+										type="button"
+										class="lod-row-btn inline secondary"
+										class:active={scopeAllAt(comment.id, scope, target)}
+										aria-pressed={scopeAllAt(comment.id, scope, target)}
+										aria-label="Set {label.toLowerCase()} to {target} detail"
+										disabled={!available}
+										title="Set {label.toLowerCase()} to {target} detail"
+										onclick={async (e) => {
+											e.stopPropagation();
+											const anchor = (e.currentTarget as HTMLElement).closest(
+												'd-comment'
+											) as HTMLElement | null;
+											const rectBefore = anchor?.getBoundingClientRect();
+											const snap = snapshotLayout();
+											onSetScopeLOD(comment.id, scope, target);
+											await animateLayoutChange(snap, anchor, rectBefore);
+										}}
+									>
+										{target}
+									</button>
+								{/each}
+							</s-lod-scope>
+						{/each}
 					</s-lod-actions>
 				{/if}
 			</d-comment-meta>
@@ -3187,7 +3127,7 @@
 		margin-bottom: 0;
 	}
 
-	:is(d-view-toolbar, s-author-actions, s-lod-actions)[role='group'] {
+	:is(d-view-toolbar, s-author-actions, s-lod-scope)[role='group'] {
 		border: 1px solid light-dark(#ccc, #444);
 		border-radius: var(--nc-radius);
 
@@ -3765,13 +3705,26 @@
 		}
 	}
 
-	/* Per-L row action buttons. Sit inline in <d-comment-meta> which has
-	   flex-wrap, so they'll wrap to a new line on narrow widths rather
-	   than overflow. Smaller and lighter than the global toolbar buttons
-	   since they repeat on every L row. */
+	/* Per-L scope controls. The meta row wraps them rather than overflowing.
+	   They remain L-only: M rows can be expanded first, which keeps touch views
+	   compact without a hover-only action surface. */
 	s-lod-actions {
+		display: inline-flex;
+		flex-wrap: wrap;
+		gap: var(--size-1);
 		margin-inline-start: auto;
 		margin-bottom: 0;
+	}
+
+	s-lod-scope {
+		display: inline-flex;
+		align-items: center;
+	}
+
+	s-lod-scope-label {
+		padding-inline: var(--size-2);
+		font-size: var(--font-size-0);
+		color: light-dark(#666, #aaa);
 	}
 
 	s-author-actions {
@@ -3817,14 +3770,6 @@
 		&.active {
 			box-shadow: inset 0 1px 3px light-dark(rgb(0 0 0 / 0.15), rgb(0 0 0 / 0.35));
 			background-color: light-dark(#e0e0e0, #383838);
-		}
-	}
-
-	/* Narrow viewports: drop "direct " from the B1 label to save width.
-	   aria-label keeps the full phrase for assistive tech. */
-	@media (max-width: 480px) {
-		.lod-row-btn s-direct {
-			display: none;
 		}
 	}
 
