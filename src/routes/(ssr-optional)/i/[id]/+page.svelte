@@ -2462,40 +2462,17 @@
 					{/if}
 				{/if}
 				{#if lod === 'L' || lod === 'M'}
-					<s-lod-actions role="group" aria-label="Comment descendant detail">
-						{#each lodScopes as { label, scope }}
-							{@const ids = scopeIds(comment.id, scope)}
-							{@const available = ids.length > 0}
-							<s-lod-scope role="group" aria-label={label}>
-								<button
-									type="button"
-									class="lod-scope-cycle"
-									aria-label="Cycle {label.toLowerCase()} detail for {ids.length} comments"
-									disabled={!available}
-									title="Cycle {label.toLowerCase()} detail for {ids.length} comments: L, S, M"
-									onclick={async (e) => {
-										e.stopPropagation();
-										const anchor = (e.currentTarget as HTMLElement).closest(
-											'd-comment'
-										) as HTMLElement | null;
-										const rectBefore = anchor?.getBoundingClientRect();
-										const snap = snapshotLayout();
-										onCycleScopeLOD(comment.id, scope);
-										await animateLayoutChange(snap, anchor, rectBefore);
-									}}
-								>
-									{label}
-									{ids.length}
-								</button>
-								{#each lodLevels as target}
+					{@const hasDescendants = scopeIds(comment.id, 'tree').length > 0}
+					{#if hasDescendants}
+						<s-lod-actions role="group" aria-label="Comment descendant detail">
+							{#each lodScopes as { label, scope }}
+								{@const ids = scopeIds(comment.id, scope)}
+								<s-lod-scope role="group" aria-label={label}>
 									<button
 										type="button"
-										class="lod-row-btn inline secondary"
-										class:active={scopeAllAt(comment.id, scope, target)}
-										aria-pressed={scopeAllAt(comment.id, scope, target)}
-										aria-label="Set {label.toLowerCase()} to {target} detail"
-										disabled={!available}
-										title="Set {label.toLowerCase()} to {target} detail"
+										class="lod-scope-cycle"
+										aria-label="Cycle {label.toLowerCase()} detail for {ids.length} comments"
+										title="Cycle {label.toLowerCase()} detail for {ids.length} comments: L, S, M"
 										onclick={async (e) => {
 											e.stopPropagation();
 											const anchor = (e.currentTarget as HTMLElement).closest(
@@ -2503,16 +2480,39 @@
 											) as HTMLElement | null;
 											const rectBefore = anchor?.getBoundingClientRect();
 											const snap = snapshotLayout();
-											onSetScopeLOD(comment.id, scope, target, lod === 'M' && target === 'L');
+											onCycleScopeLOD(comment.id, scope);
 											await animateLayoutChange(snap, anchor, rectBefore);
 										}}
 									>
-										{target}
+										{label}
+										{ids.length}
 									</button>
-								{/each}
-							</s-lod-scope>
-						{/each}
-					</s-lod-actions>
+									{#each lodLevels as target}
+										<button
+											type="button"
+											class="lod-row-btn inline secondary"
+										class:active={scopeAllAt(comment.id, scope, target)}
+										aria-pressed={scopeAllAt(comment.id, scope, target)}
+										aria-label="Set {label.toLowerCase()} to {target} detail"
+											title="Set {label.toLowerCase()} to {target} detail"
+											onclick={async (e) => {
+												e.stopPropagation();
+												const anchor = (e.currentTarget as HTMLElement).closest(
+													'd-comment'
+												) as HTMLElement | null;
+												const rectBefore = anchor?.getBoundingClientRect();
+												const snap = snapshotLayout();
+												onSetScopeLOD(comment.id, scope, target, lod === 'M' && target === 'L');
+												await animateLayoutChange(snap, anchor, rectBefore);
+											}}
+										>
+											{target}
+										</button>
+									{/each}
+								</s-lod-scope>
+							{/each}
+						</s-lod-actions>
+					{/if}
 				{/if}
 			</d-comment-meta>
 			{#if comment.content && !isDead}
