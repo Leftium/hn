@@ -4164,21 +4164,26 @@
 
 		&.guideline-threshold-failed {
 			opacity: 0.18;
-			filter: blur(1.5px);
-			transition:
-				opacity 120ms ease,
-				filter 120ms ease;
+			transition: opacity 120ms ease;
+
+			> :is(d-comment-meta, d-comment-body) {
+				filter: blur(1.5px);
+				transition: filter 120ms ease;
+			}
 		}
 
 		&.guideline-threshold-failed:hover,
 		&.guideline-threshold-failed:focus-within,
 		&.guideline-threshold-failed:focus {
 			opacity: 1;
-			filter: none;
 			grid-template-areas:
 				'tooltip'
 				'meta'
 				'body';
+
+			> :is(d-comment-meta, d-comment-body) {
+				filter: none;
+			}
 
 			s-guideline-tooltip {
 				display: block;
