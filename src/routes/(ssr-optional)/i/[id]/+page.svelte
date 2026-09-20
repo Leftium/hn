@@ -4281,6 +4281,56 @@
 		white-space: pre-line;
 	}
 
+	@supports (anchor-name: --guideline-comment) and (anchor-scope: --guideline-comment) and
+		(position-area: block-start) {
+		d-comment.guideline-threshold-failed {
+			anchor-name: --guideline-comment;
+			anchor-scope: --guideline-comment;
+		}
+
+		/* Keep the normal L grid and single-line M layout while the reasons
+		   float outside the comment. */
+		d-comment.guideline-threshold-failed:is(:hover, :focus-within, :focus) {
+			overflow: visible;
+			grid-template-areas:
+				'meta'
+				'body';
+		}
+
+		d-comment.guideline-threshold-failed:is(:hover, :focus-within, :focus)[data-lod='M'] {
+			flex-wrap: nowrap;
+		}
+
+		d-comment.guideline-threshold-failed > s-guideline-tooltip {
+			position: fixed;
+			position-anchor: --guideline-comment;
+			position-area: block-start;
+			position-try-fallbacks: flip-block;
+			/* Chromium shipped the shorthand earlier than the longhand name. */
+			position-try: flip-block;
+			inset: auto;
+			z-index: 20;
+
+			/* Match the comment width when possible, but never exceed the viewport. */
+			width: anchor-size(width);
+			max-width: calc(100vw - var(--size-4));
+			max-height: min(50vh, 24rem);
+			overflow: auto;
+
+			/* Keep a small gap from the comment. flip-block mirrors this offset when
+			   the panel falls back below the anchor. */
+			margin: 0;
+			margin-block-end: var(--size-1);
+
+			/* The reason panel is informational; do not block neighboring controls. */
+			pointer-events: none;
+
+			grid-area: auto;
+			order: initial;
+			flex: none;
+		}
+	}
+
 	s-level {
 		display: inline-block;
 		margin-right: 0.25ch;
