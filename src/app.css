@@ -1,5 +1,4 @@
 @import '@leftium/nimble.css';
-@import './lib/comment-guideline-reasons.css';
 
 :root {
 	--nc-content-width: min(42.875em, 100%);
