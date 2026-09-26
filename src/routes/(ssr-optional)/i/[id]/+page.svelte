@@ -2291,6 +2291,7 @@
 
 {#snippet authorPromotionActions(username: string)}
 	<s-author-actions
+		class="nc-join"
 		role="group"
 		aria-label="Promote comments by {username}"
 		style:--author-promotion-color={authorColor(username)}
@@ -2342,14 +2343,9 @@
 	{@const guidelineTitle = guidelineTooltip(guidelineMatches)}
 	{@const guidelineTooltipId = guidelineTitle ? `guideline-tooltip-${comment.id}` : undefined}
 	<!--
-		Row click (and Enter/Space) toggles LOD (L↔M). We deliberately do NOT
-		add role="button" because nimble.css styles [role="button"] as a full
-		button (bg, padding, border-radius, text-align: center) and that
-		styling is impossible to opt out of without !important wrestling.
-		Instead: tabindex="0" + onkeydown is enough for keyboard access, and
-		per-L rows also expose explicit B1–B4 buttons that AT users can
-		target directly. The svelte-ignore comments below acknowledge this
-		tradeoff rather than the element being keyboard-inaccessible.
+		Row click (and Enter/Space) toggles LOD between L and M. The row also contains
+		links and buttons, so keep their semantics independent of the row's
+		keyboard action. The explicit LOD buttons remain available to AT users.
 	-->
 	<!-- svelte-ignore a11y_no_static_element_interactions -->
 	<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
@@ -2467,7 +2463,7 @@
 						<s-lod-actions role="group" aria-label="Comment descendant detail">
 							{#each lodScopes as { label, scope }}
 								{@const ids = scopeIds(comment.id, scope)}
-								<s-lod-scope role="group" aria-label={label}>
+								<s-lod-scope class="nc-join" role="group" aria-label={label}>
 									<button
 										type="button"
 										class="lod-scope-cycle"
@@ -2491,9 +2487,9 @@
 										<button
 											type="button"
 											class="lod-row-btn inline secondary"
-										class:active={scopeAllAt(comment.id, scope, target)}
-										aria-pressed={scopeAllAt(comment.id, scope, target)}
-										aria-label="Set {label.toLowerCase()} to {target} detail"
+											class:active={scopeAllAt(comment.id, scope, target)}
+											aria-pressed={scopeAllAt(comment.id, scope, target)}
+											aria-label="Set {label.toLowerCase()} to {target} detail"
 											title="Set {label.toLowerCase()} to {target} detail"
 											onclick={async (e) => {
 												e.stopPropagation();
@@ -2927,7 +2923,7 @@
 				{#if filterExpanded}
 					{@render newCommentTimeline(item.id)}
 				{/if}
-				<d-view-toolbar role="group" aria-label="All comments">
+				<d-view-toolbar class="nc-join" role="group" aria-label="All comments">
 					<span class="view-toolbar-label">All comments</span>
 					<button
 						type="button"
@@ -3168,7 +3164,7 @@
 		color: light-dark(#666, #aaa);
 	}
 
-	:is(d-view-toolbar, s-author-actions, s-lod-scope)[role='group'] {
+	:is(d-view-toolbar, s-author-actions, s-lod-scope).nc-join {
 		border: 1px solid light-dark(#ccc, #444);
 		border-radius: var(--nc-radius);
 

@@ -2,27 +2,6 @@
 
 :root {
 	--nc-content-width: min(42.875em, 100%);
-}
-
-/* nimble.css v0.17+ uses --nc-column-width for both the grid column and shadow width.
-   Override it to exact content-width (no spacing) for edge-to-edge content.
-   Also remove top/bottom padding. */
-body {
-	--nc-column-width: var(--nc-content-width);
-	padding-block: 0;
-}
-
-/* nimble.css adds padding-inline to all body children to match its wider column formula.
-   Since we override the column to exact content-width (no extra room), zero out the padding.
-   Individual components (footer, config page) supply their own padding as needed. */
-body > *,
-body > [style*='display: contents'] > * {
-	padding-inline: 0;
-}
-
-/* nimble.css 0.13.0 added margin-block-end: 0.25em to [role=button] for prose vertical rhythm.
-   s-scroll uses role="button" for accessibility but is a layout element inside a grid row,
-   so the bottom margin creates unwanted gaps between rows. */
-:where([role='button']) {
-	margin-block-end: 0;
+	--nc-page-padding-inline: 0;
+	--nc-page-padding-block: 0;
 }
