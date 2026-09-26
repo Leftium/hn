@@ -4571,6 +4571,7 @@
 	button.s-solo {
 		display: block;
 		height: 0.75em;
+		min-height: 0;
 		width: 4ch;
 		padding: 0;
 		background: var(--level-color, #888);
@@ -4634,6 +4635,8 @@
 		align-self: stretch;
 		width: var(--seg-width, 4px);
 		height: auto;
+		/* Nimble's default button min-height would stretch the entire strip. */
+		min-height: 0;
 		/* Open Props normalize.css adds margin-block-end to buttons; zero it. */
 		margin: 0;
 		padding: 0;
