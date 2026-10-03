@@ -97,3 +97,25 @@ You can preview the production build with `npm run preview`.
 > To deploy your app, you may need to install an [adapter](https://svelte.dev/docs/kit/adapters) for your target environment.
 
 </details>
+
+## Diagnosing HTML-backed feeds
+
+Run `pnpm diagnose:hn --live [feed]` explicitly to query one feed, or omit the
+feed to query all eight HTML-backed feeds once each. This command is separate
+from CI. It reports HTTP status, content type, parsed count, and typed error
+details. Do not repeatedly run it against a refusing upstream.
+
+`fetchHN` returns a Wellcrafted Result. A failed later page retains earlier
+stories in `error.partial`; its pagination cursor retries the failed page.
+The page exposes only a compact message and an upstream link. Server logs use
+`event: "hn_feed_failure"` with status, Retry-After, response size, a SHA-256
+fingerprint, and a sanitized preview capped at 160 characters.
+
+On October 3, 2026, local requests received HTTP 419 and a six-byte `Sorry\n`
+body from Active, Show New, Noob Stories, and Launches. Classic, Ask New, Pool,
+and Invited returned normal lists. Browser-like headers also received 419 for
+Active. Production's Active and Classic data endpoints returned empty lists;
+the old implementation discarded the upstream evidence. These observations
+confirm upstream refusals locally but do not establish a Vercel-specific cause.
+Use the preview's structured logs to distinguish refusal from parser failures
+before changing transport, adding retries, or attributing the issue to egress IPs.

@@ -1,7 +1,7 @@
 import type { PageServerLoad } from './$types';
 import { fetchHckrnews } from '$lib/fetch-hckrnews';
 import { fetchHNApi } from '$lib/fetch-hn-api';
-import { fetchHN } from '$lib/fetch-hn';
+import { fetchHN, type HNError, type HNFeed } from '$lib/fetch-hn';
 
 export const load: PageServerLoad = async ({ fetch, params, cookies }) => {
 	const source = params.source || 'hckrnews';
@@ -59,6 +59,20 @@ export const load: PageServerLoad = async ({ fetch, params, cookies }) => {
 	};
 
 	let result;
+	let feedError: { message: string; partial: boolean } | undefined;
+	function scrapedFeed(hnResult: Awaited<ReturnType<typeof fetchHN>>): HNFeed {
+		if (!hnResult.error) return hnResult.data;
+		const { partial, ...diagnostic }: HNError = hnResult.error;
+		console.error(
+			JSON.stringify({
+				event: 'hn_feed_failure',
+				...diagnostic,
+				retainedStories: partial?.stories.length ?? 0
+			})
+		);
+		feedError = { message: hnResult.error.message, partial: !!partial?.stories.length };
+		return partial ?? { stories: [] };
+	}
 	let previousDate: string | undefined;
 	let nextRange: string | undefined;
 	let startPage = 1;
@@ -113,12 +127,12 @@ export const load: PageServerLoad = async ({ fetch, params, cookies }) => {
 			startIndex = itemIndex;
 		}
 
-		const hnResult = await fetchHN(fetch, source, startId, pageCount, startIndex);
+		const hnResult = scrapedFeed(await fetchHN(fetch, source, startId, pageCount, startIndex));
 		result = hnResult.stories;
 		nextRange = hnResult.nextRange;
 		startIndex = source === 'classic' || source === 'active' ? startIndex : itemIndex;
 	} else {
-		const hnResult = await fetchHN(fetch, source);
+		const hnResult = scrapedFeed(await fetchHN(fetch, source));
 		result = hnResult.stories;
 	}
 
@@ -131,6 +145,7 @@ export const load: PageServerLoad = async ({ fetch, params, cookies }) => {
 
 	return {
 		stories: result,
+		feedError,
 		previousDate,
 		nextRange,
 		startPage,

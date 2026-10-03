@@ -365,6 +365,14 @@
 		</a>
 	</d-item>
 
+	{#if data.feedError}
+		<p class="feed-error" role="status">
+			{data.feedError.message}
+			{#if data.feedError.partial}Earlier stories are shown below.{/if}
+			<a href={`https://news.ycombinator.com/${data.source}`}>Open this feed on Hacker News</a>
+		</p>
+	{/if}
+
 	{#each data.stories ?? [] as story, index (story.id)}
 		{@const globalIndex =
 			data.startIndex !== undefined ? data.startIndex + index : (data.startPage - 1) * 30 + index}
@@ -415,6 +423,12 @@
 </main>
 
 <style>
+	.feed-error {
+		margin: var(--size-3);
+		padding: var(--size-3);
+		border-left: 3px solid #ff6600;
+	}
+
 	d-item {
 		display: grid;
 		grid-template-columns: 1fr 4ch;

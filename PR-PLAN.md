@@ -43,3 +43,18 @@ Restore the affected Hacker News HTML-backed feeds, identify why production requ
 - Exercise affected feeds locally.
 - Exercise the relevant deployed/preview runtime path and record the observed root cause and resulting behavior.
 - If adding a live diagnostic command, keep it opt-in and verify it makes at most the intended bounded requests.
+
+## Implementation decisions
+
+- HTTP failures, including HN's nonstandard 419 Sorry response, remain HTTP
+  errors with response diagnostics. A 200 blocking or non-list response is an
+  unexpected-response error; malformed story rows are parse errors.
+- A later-page error carries prior stories in `error.partial`. The result stays
+  a failure, and the retained cursor retries the failed page.
+- Honor upstream pagination links, stop at the actual end of a list, and use
+  explicit page cursors rather than deriving page numbers from retained counts.
+- Normalize timezone-free HN timestamps to UTC and isolate story rows so a
+  malformed row cannot consume the following story's metadata.
+- Keep request headers unchanged: the single browser-header comparison still
+  received 419, so changing headers has no demonstrated benefit.
+- `pnpm diagnose:hn --live [feed]` is opt-in and fetches each selected feed once.
