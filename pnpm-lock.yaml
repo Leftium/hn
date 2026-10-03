@@ -11,6 +11,9 @@ importers:
       '@vercel/analytics':
         specifier: ^2.0.1
         version: 2.0.1(@sveltejs/kit@2.70.3(@sveltejs/vite-plugin-svelte@7.3.0(svelte@5.57.0(@typescript-eslint/types@8.70.0))(vite@8.3.0(@types/node@25.9.6)(jiti@2.7.0)(yaml@2.9.1)))(svelte@5.57.0(@typescript-eslint/types@8.70.0))(typescript@6.0.3)(vite@8.3.0(@types/node@25.9.6)(jiti@2.7.0)(yaml@2.9.1)))(svelte@5.57.0(@typescript-eslint/types@8.70.0))
+      wellcrafted:
+        specifier: ^0.44.0
+        version: 0.44.0
     devDependencies:
       '@eslint/compat':
         specifier: ^2.1.1
@@ -1530,6 +1533,9 @@ packages:
   web-sentinel@0.1.5:
     resolution: {integrity: sha512-9X4I9fK17v1hDiHFAZAAeMx8qmJdo2y9ZqMcLdM5qaby69YgNHHsC6OwJC2vRK0Mo+Cqba0drkfJ74/VjL0xxw==}
 
+  wellcrafted@0.44.0:
+    resolution: {integrity: sha512-tqmYveAIYitD1BsuYzYb64b1aXMmQRVqi2Vy/qyXICX99sn3TmKQcnGBrF/qNknGsWp5aZJNggroP+ICmalADQ==}
+
   which@2.0.2:
     resolution: {integrity: sha512-BLI3Tl1TW3Pvl70l3yq3Y64i+awpwXqsGBYWkkqMtnbXgrMD+yj7rhW0kuEDxzJaYXGjEW5ogapKNMEKNMjibA==}
     engines: {node: '>= 8'}
@@ -2865,6 +2871,8 @@ snapshots:
   web-sentinel@0.1.5:
     dependencies:
       shiki: 4.4.3
+
+  wellcrafted@0.44.0: {}
 
   which@2.0.2:
     dependencies:

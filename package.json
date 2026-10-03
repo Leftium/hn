@@ -8,6 +8,7 @@
 		"build": "vite build",
 		"preview": "vite preview",
 		"test": "node --test src/lib/*.test.ts",
+		"diagnose:hn": "node scripts/diagnose-hn.ts",
 		"prepare": "svelte-kit sync || echo ''",
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
 		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
@@ -42,6 +43,7 @@
 		"web-sentinel": "^0.1.5"
 	},
 	"dependencies": {
-		"@vercel/analytics": "^2.0.1"
+		"@vercel/analytics": "^2.0.1",
+		"wellcrafted": "^0.44.0"
 	}
 }
