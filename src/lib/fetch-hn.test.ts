@@ -54,7 +54,14 @@ test('retains legacy Unix timestamps and next-id pagination', async () => {
 	assert.deepEqual(requestedUrls, ['https://news.ycombinator.com/shownew?next=789']);
 });
 
-for (const status of [419, 429, 403, 503]) {
+for (const [status, message] of [
+	[419, 'Hacker News refused this request (HTTP 419).'],
+	[403, 'Hacker News refused this request (HTTP 403).'],
+	[429, 'Hacker News rate-limited this request (HTTP 429).'],
+	[500, 'Hacker News returned a server error (HTTP 500).'],
+	[503, 'Hacker News returned a server error (HTTP 503).'],
+	[404, 'Hacker News returned HTTP 404.']
+] as const) {
 	test(`HTTP ${status} is a serializable upstream error`, async () => {
 		const result = await fetchHN(
 			(async () =>
@@ -69,6 +76,7 @@ for (const status of [419, 429, 403, 503]) {
 		assert.equal(result.error?.name, 'UpstreamHttpError');
 		if (result.error?.name !== 'UpstreamHttpError') assert.fail('Expected HTTP error');
 		assert.equal(result.error?.status, status);
+		assert.equal(result.error.message, message);
 		assert.equal(result.error?.retryAfter, '60');
 		assert.equal(result.error?.preview, 'Sorry');
 		assert.equal(result.error?.fingerprint, '21676075593979e0');

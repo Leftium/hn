@@ -31,7 +31,14 @@ type ResponseContext = RequestContext & {
 export const HNError = defineErrors({
 	UpstreamHttpError: (context: ResponseContext) => ({
 		...context,
-		message: `Hacker News refused this request (HTTP ${context.status}).`
+		message:
+			context.status === 403 || context.status === 419
+				? `Hacker News refused this request (HTTP ${context.status}).`
+				: context.status === 429
+					? 'Hacker News rate-limited this request (HTTP 429).'
+					: context.status >= 500 && context.status < 600
+						? `Hacker News returned a server error (HTTP ${context.status}).`
+						: `Hacker News returned HTTP ${context.status}.`
 	}),
 	NetworkError: (context: RequestContext & { cause: string }) => ({
 		...context,
