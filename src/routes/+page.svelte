@@ -1,9 +1,9 @@
 <script lang="ts">
-	import { browser } from '$app/environment';
+	import { browser } from '$app/env';
 	import { resolve } from '$app/paths';
 
 	let { data } = $props();
-	const hckrnewsPath = resolve('/hckrnews');
+	const hckrnewsPath = resolve('hckrnews');
 
 	$effect(() => {
 		if (!browser || !data.isLegacyHost) return;

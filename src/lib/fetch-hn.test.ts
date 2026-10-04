@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 // Node's native TypeScript runner requires the runtime extension.
-// @ts-expect-error allowImportingTsExtensions is intentionally not enabled project-wide.
 import { fetchHN } from './fetch-hn.ts';
 
 function storyHtml({

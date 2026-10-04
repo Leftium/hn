@@ -1,6 +1,6 @@
 <script lang="ts">
 	import dayjs from 'dayjs';
-	import { FEED_SOURCES } from '$lib';
+	import { FEED_SOURCES } from '#lib';
 	import 'open-props/style';
 	import { untrack } from 'svelte';
 

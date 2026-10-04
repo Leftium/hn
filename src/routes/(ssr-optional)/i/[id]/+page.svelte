@@ -1,23 +1,23 @@
 <script lang="ts">
-	import type { HNItem } from '$lib/fetch-hn-item';
-	import { domainify, fetchHNItemTree } from '$lib/fetch-hn-item';
-	import { fetchHnpwaItem } from '$lib/fetch-hnpwa';
+	import type { HNItem } from '#lib/fetch-hn-item.js';
+	import { domainify, fetchHNItemTree } from '#lib/fetch-hn-item.js';
+	import { fetchHnpwaItem } from '#lib/fetch-hnpwa.js';
 	import {
 		guidelineTooltip,
 		matchingGuidelines,
 		parseViolationResult,
 		parseViolationThreshold,
 		type GuidelineScore
-	} from '$lib/comment-violations';
+	} from '#lib/comment-violations.js';
 	import {
 		beginItemView,
 		countNewComments,
 		countVisibleComments,
 		isHiddenComment,
 		type ItemViewCheckpoint
-	} from '$lib/item-view-history';
-	import { browser } from '$app/environment';
-	import { replaceState } from '$app/navigation';
+	} from '#lib/item-view-history.js';
+	import { browser } from '$app/env';
+	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import { onMount, tick, untrack } from 'svelte';
@@ -628,7 +628,7 @@
 		lodState.clear();
 		defaultManagedLodIds.clear();
 	}
-	function readAuthorPromotions(params: URLSearchParams): [string, AuthorPromotion][] {
+	function readAuthorPromotions(params: Iterable<[string, string]>): [string, AuthorPromotion][] {
 		const promotions: [string, AuthorPromotion][] = [];
 		for (const [name, username] of params) {
 			if (!username || (name !== 'm' && name !== 'l')) continue;
@@ -1323,7 +1323,7 @@
 
 	function replaceViewUrl(query: string, promotions: ReadonlyMap<string, AuthorPromotion>): void {
 		if (!browser) return;
-		const url = new URL(page.url);
+		const url = new URL(page.url.href);
 		url.searchParams.delete('q');
 		url.searchParams.delete('m');
 		url.searchParams.delete('l');
@@ -1333,8 +1333,7 @@
 			url.searchParams.append(level.toLowerCase(), username);
 		}
 		if (url.href === page.url.href) return;
-		// eslint-disable-next-line svelte/no-navigation-without-resolve -- updates only the current route's query parameters
-		replaceState(url, page.state);
+		void goto(url, { shallow: true, replace: true, state: page.state });
 	}
 
 	function cancelPendingSearchUpdate(): void {
@@ -1343,7 +1342,7 @@
 		searchDebounce = undefined;
 	}
 
-	function hydratePromotionState(url: URL): void {
+	function hydratePromotionState(url: Pick<typeof page.url, 'searchParams'>): void {
 		cancelPendingSearchUpdate();
 		const urlQuery = url.searchParams.get('q') ?? '';
 		searchInput = urlQuery;
@@ -3033,7 +3032,7 @@
 
 				{#if parentStoryId}
 					<d-parent>
-						<a href={resolve(`/i/${parentStoryId}`)} class="meta-link">← parent story</a>
+						<a href={resolve(`i/${parentStoryId}`)} class="meta-link">← parent story</a>
 					</d-parent>
 				{/if}
 			</d-item-header>

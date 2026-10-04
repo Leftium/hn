@@ -1,12 +1,12 @@
 <script lang="ts">
-	import type { NormalizedStory } from '$lib/fetch-hckrnews';
+	import type { NormalizedStory } from '#lib/fetch-hckrnews.js';
 	import type { PathnameWithSearchOrHash } from '$app/types';
-	import { FEED_NAMES, FEED_SOURCES } from '$lib';
+	import { FEED_NAMES, FEED_SOURCES } from '#lib';
 	let { data } = $props();
 	import 'open-props/style';
 	import { onMount, untrack } from 'svelte';
 	import { SvelteURLSearchParams } from 'svelte/reactivity';
-	import { browser } from '$app/environment';
+	import { browser } from '$app/env';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import dayjs from 'dayjs';
@@ -275,7 +275,7 @@
 		? dayjs.unix(timeFrontpage).diff(dayjs.unix(time), 'hour')
 		: 0}
 
-	{@const link = dead ? `https://news.ycombinator.com/item?id=${id}` : resolve(`/i/${id}`)}
+	{@const link = dead ? `https://news.ycombinator.com/item?id=${id}` : resolve(`i/${id}`)}
 	{@const domain = story.domain}
 	{@const path = story.url
 		?.replace(/^https:\/\/(www.)?/, '')
@@ -338,7 +338,7 @@
 
 <main>
 	<d-item class="config-info new-item">
-		<a href={resolve(`/config?from=${data.source}`)}>
+		<a href={resolve(`config?from=${data.source}`)}>
 			<d-title>
 				<strong>{FEED_NAMES[data.source]}</strong>
 				{#if data.visitData}
@@ -358,7 +358,7 @@
 				</d-metadata>
 			{/if}
 		</a>
-		<a href={resolve(`/config?from=${data.source}`)} class="scroll-link">
+		<a href={resolve(`config?from=${data.source}`)} class="scroll-link">
 			<s-scroll class="new">
 				<s-config>⚙</s-config>
 			</s-scroll>

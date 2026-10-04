@@ -1,7 +1,7 @@
 import type { PageServerLoad } from './$types';
-import { fetchHckrnews } from '$lib/fetch-hckrnews';
-import { fetchHNApi } from '$lib/fetch-hn-api';
-import { fetchHN, type HNError, type HNFeed } from '$lib/fetch-hn';
+import { fetchHckrnews } from '#lib/fetch-hckrnews.js';
+import { fetchHNApi } from '#lib/fetch-hn-api.js';
+import { fetchHN, type HNError, type HNFeed } from '#lib/fetch-hn.js';
 
 export const load: PageServerLoad = async ({ fetch, params, cookies }) => {
 	const source = params.source || 'hckrnews';

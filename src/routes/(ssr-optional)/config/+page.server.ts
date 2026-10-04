@@ -1,5 +1,5 @@
 import { redirect } from '@sveltejs/kit';
-import { parseViolationThreshold } from '$lib/comment-violations';
+import { parseViolationThreshold } from '#lib/comment-violations.js';
 import type { Actions, PageServerLoad } from './$types';
 
 const COOKIE_OPTIONS = {
