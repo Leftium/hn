@@ -1,6 +1,6 @@
 import { redirect } from '@sveltejs/kit';
 
-import { getEffectiveHostname } from '$lib/effective-host';
+import { getEffectiveHostname } from '#lib/effective-host.js';
 
 import type { PageServerLoad } from './$types';
 

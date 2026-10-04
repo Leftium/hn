@@ -1,5 +1,5 @@
-import { getEffectiveHostname } from '$lib/effective-host';
-import { parseViolationThreshold } from '$lib/comment-violations';
+import { getEffectiveHostname } from '#lib/effective-host.js';
+import { parseViolationThreshold } from '#lib/comment-violations.js';
 
 import type { LayoutServerLoad } from './$types';
 

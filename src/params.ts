@@ -1,6 +1,6 @@
-import type { ParamMatcher } from '@sveltejs/kit';
+import { defineParams } from '@sveltejs/kit/params';
 
-export const match: ParamMatcher = (param) => {
+const matchSourcetype = (param: string) => {
 	return [
 		'hckrnews',
 		'news',
@@ -20,3 +20,7 @@ export const match: ParamMatcher = (param) => {
 		'invited'
 	].includes(param);
 };
+
+export const params = defineParams({
+	sourcetype: (param) => (matchSourcetype(param) ? param : undefined)
+});

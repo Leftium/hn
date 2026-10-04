@@ -1,17 +1,29 @@
 <script lang="ts">
-	import { FEED_SOURCES } from '$lib';
-	import { browser } from '$app/environment';
-	import { navigating } from '$app/stores';
+	import { FEED_SOURCES } from '#lib';
+	import { browser } from '$app/env';
+	import { navigating, page } from '$app/state';
 	import { resolve } from '$app/paths';
 	import { untrack } from 'svelte';
 	import dayjs from 'dayjs';
 
 	import '../app.css';
 
-	import { dev } from '$app/environment';
-	import { injectAnalytics } from '@vercel/analytics/sveltekit';
+	import { dev } from '$app/env';
+	import { inject, pageview } from '@vercel/analytics';
 
-	injectAnalytics({ mode: dev ? 'development' : 'production' });
+	// The analytics Kit integration still depends on the removed $app/stores API.
+	inject(
+		{
+			mode: dev ? 'development' : 'production',
+			disableAutoTrack: true,
+			framework: 'sveltekit',
+			basePath: import.meta.env.VITE_VERCEL_OBSERVABILITY_BASEPATH
+		},
+		import.meta.env.VITE_VERCEL_OBSERVABILITY_CLIENT_CONFIG
+	);
+	$effect(() => {
+		if (page.route.id) pageview({ route: page.route.id, path: page.url.pathname });
+	});
 
 	let { children, data } = $props();
 
@@ -57,7 +69,7 @@
 		// to the server, so SSR cannot see them and the browser must convert them.
 		const match = window.location.hash.match(/^#\/item\/(\d+)\/?$/);
 		if (match) {
-			window.location.replace(resolve(`/i/${match[1]}`));
+			window.location.replace(resolve(`i/${match[1]}`));
 		}
 	}
 
@@ -79,20 +91,17 @@
 
 	let clientSessionExpires = $state<number | null>(untrack(() => data.sessionExpires) || null);
 
-	if (browser) {
-		navigating.subscribe((nav) => {
-			if (nav === null) {
-				const now = Math.floor(Date.now() / 1000);
-				const cookies = document.cookie.split('; ');
-				const thresholdCookie = cookies.find((row) => row.startsWith('new_item_threshold='));
-				const currentThreshold = thresholdCookie ? thresholdCookie.split('=')[1] : now.toString();
-				document.cookie = `new_item_threshold=${currentThreshold}; path=/; max-age=${20 * 60}`;
-				document.cookie = `session_start=${now}; path=/; max-age=${20 * 60}`;
-				clientSessionExpires = now + 20 * 60;
-				updateSessionTime();
-			}
-		});
-	}
+	$effect(() => {
+		if (!browser || navigating !== null) return;
+		const now = Math.floor(Date.now() / 1000);
+		const cookies = document.cookie.split('; ');
+		const thresholdCookie = cookies.find((row) => row.startsWith('new_item_threshold='));
+		const currentThreshold = thresholdCookie ? thresholdCookie.split('=')[1] : now.toString();
+		document.cookie = `new_item_threshold=${currentThreshold}; path=/; max-age=${20 * 60}`;
+		document.cookie = `session_start=${now}; path=/; max-age=${20 * 60}`;
+		clientSessionExpires = now + 20 * 60;
+		updateSessionTime();
+	});
 
 	function getOrdinalSuffix(n: number): string {
 		const lastDigit = n % 10;
@@ -129,7 +138,7 @@
 			<h3>Lists</h3>
 			<ul>
 				{#each mainFeeds as feed (feed.id)}
-					<li><a href={resolve(`/${feed.id}`)}>{feed.name}</a></li>
+					<li><a href={resolve(`${feed.id}`)}>{feed.name}</a></li>
 				{/each}
 			</ul>
 		</div>
@@ -137,7 +146,7 @@
 			<h3>More Lists</h3>
 			<ul>
 				{#each moreFeeds as feed (feed.id)}
-					<li><a href={resolve(`/${feed.id}`)}>{feed.name}</a></li>
+					<li><a href={resolve(`${feed.id}`)}>{feed.name}</a></li>
 				{/each}
 			</ul>
 		</div>
