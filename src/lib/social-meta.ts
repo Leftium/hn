@@ -1,4 +1,5 @@
 import type { Handle } from '@sveltejs/kit/hooks';
+import { parseFragment } from 'parse5';
 
 const SITE_NAME = 'HN Reader';
 const DESCRIPTION = 'Read Hacker News stories and discussions with HN Reader.';
@@ -21,8 +22,20 @@ function itemTitle(value: unknown, id: string): string | null {
 		typeof item.title !== 'string'
 	)
 		return null;
+	// Parse upstream HTML once: decode entities, retain visible text, and discard markup.
+	// Encoded angle brackets stay text and are escaped again only when emitting tags.
+	const nodes = [...parseFragment(item.title).childNodes].reverse();
+	const text: string[] = [];
+	while (nodes.length) {
+		const node = nodes.pop()!;
+		if ('value' in node) text.push(node.value);
+		else if ('tagName' in node && !['script', 'style', 'template'].includes(node.tagName)) {
+			nodes.push(...node.childNodes.slice().reverse());
+		}
+	}
 	return (
-		item.title
+		text
+			.join('')
 			// Strip upstream control characters from HTML metadata.
 			// eslint-disable-next-line no-control-regex
 			.replace(/[\u0000-\u001f\u007f]/g, ' ')

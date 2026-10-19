@@ -33,7 +33,7 @@ test('fetches just the root item and escapes all upstream text', async () => {
 			return Response.json({
 				id: 123,
 				type: 'story',
-				title: 'A & "B" <script> \'C\'',
+				title: 'A & "B" &lt;script&gt; \'C\'',
 				kids: [456]
 			});
 		}
@@ -43,6 +43,42 @@ test('fetches just the root item and escapes all upstream text', async () => {
 	assert.ok(tags.includes('A &amp; &quot;B&quot; &lt;script&gt; &#39;C&#39;'));
 	assert.ok(!tags.includes('<script>'));
 	assert.ok(tags.includes('property="og:url" content="https://hn.example/i/123"'));
+});
+
+test('normalizes title HTML entities and markup before escaping metadata', async () => {
+	const metadata = createSocialMetadata({
+		fetchFn: fixture({
+			id: 123,
+			type: 'story',
+			title: 'R&amp;D <b>&quot;tools&quot;</b> &#39;today&#39; &#x26; &copy; <!-- hidden -->'
+		})
+	});
+	const tags = await metadata.tags(new URL('https://hn.example/i/123'));
+	const escaped = 'R&amp;D &quot;tools&quot; &#39;today&#39; &amp; \u00a9';
+	assert.ok(tags.includes(`<title>${escaped} | HN Reader</title>`));
+	assert.ok(tags.includes(`property="og:title" content="${escaped} | HN Reader"`));
+	assert.ok(tags.includes(`name="twitter:title" content="${escaped} | HN Reader"`));
+	assert.ok(!tags.includes('&amp;amp;'));
+	assert.ok(!tags.includes('<b>'));
+	assert.ok(!tags.includes('hidden'));
+});
+
+test('decoded markup and attribute payloads remain inert text in generated tags', async () => {
+	const metadata = createSocialMetadata({
+		fetchFn: fixture({
+			id: 123,
+			type: 'story',
+			title:
+				'&lt;/title&gt;&lt;script&gt;alert(1)&lt;/script&gt; &quot; onload=&quot;bad <img src=x onerror=bad><script>hidden()</script><style>hidden</style>'
+		})
+	});
+	const tags = await metadata.tags(new URL('https://hn.example/i/123'));
+	assert.ok(tags.includes('&lt;/title&gt;&lt;script&gt;alert(1)&lt;/script&gt;'));
+	assert.ok(tags.includes('&quot; onload=&quot;bad'));
+	assert.ok(!tags.includes('<script>'));
+	assert.ok(!tags.includes('<img'));
+	assert.ok(!tags.includes('hidden'));
+	assert.equal((tags.match(/<\/title>/g) || []).length, 1);
 });
 
 test('invalid item IDs never contact upstream', async () => {
