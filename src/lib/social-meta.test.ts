@@ -241,6 +241,30 @@ test('handle injects metadata into initial HTML across chunk boundaries without 
 	assertNoImageOrDescription(html);
 });
 
+test('HTML injection preserves dollar replacement tokens in story titles', async () => {
+	const metadata = createSocialMetadata({
+		fetchFn: fixture({ id: 123, type: 'story', title: "Tokens: $& $` $' $$" })
+	});
+	const event = { url: new URL('https://hn.example/i/123'), isDataRequest: false } as RequestEvent;
+	const response = await metadata.handle({
+		event,
+		resolve: async (_event, options?: ResolveOptions) => {
+			const html = await options!.transformPageChunk!({
+				html: '<html><head><title>HN Reader</title></head><body>Body</body></html>',
+				done: true
+			});
+			return new Response(html);
+		}
+	});
+	const html = await response.text();
+	const escapedTitle = 'Tokens: $&amp; $` $&#39; $$';
+	assert.ok(html.includes(`<title>${escapedTitle} | HN Reader</title>`));
+	assert.ok(html.includes(`property="og:title" content="${escapedTitle}"`));
+	assert.ok(html.includes(`name="twitter:title" content="${escapedTitle}"`));
+	assert.equal((html.match(/<\/head>/g) || []).length, 1);
+	assert.equal((html.match(/<body>Body<\/body>/g) || []).length, 1);
+});
+
 test('data and non-HTML responses skip metadata fetching', async () => {
 	let calls = 0;
 	const metadata = createSocialMetadata({

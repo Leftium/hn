@@ -105,7 +105,7 @@ export function createSocialMetadata({
 				'og:title': socialTitle,
 				'og:url': canonical,
 				'twitter:card': 'summary',
-				'twitter:title': socialTitle,
+				'twitter:title': socialTitle
 			}).map(
 				([name, content]) =>
 					`<meta ${name.startsWith('og:') ? 'property' : 'name'}="${name}" content="${escapeHtml(content)}" />`
@@ -125,7 +125,7 @@ export function createSocialMetadata({
 				const metadata = await tags(event.url);
 				return buffered
 					.replace('<title>HN Reader</title>', '')
-					.replace('</head>', `${metadata}</head>`);
+					.replace('</head>', () => `${metadata}</head>`);
 			}
 		});
 	};
