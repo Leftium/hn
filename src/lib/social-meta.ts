@@ -2,8 +2,6 @@ import type { Handle } from '@sveltejs/kit/hooks';
 import { parseFragment } from 'parse5';
 
 const SITE_NAME = 'HN Reader';
-const DESCRIPTION = 'Read Hacker News stories and discussions with HN Reader.';
-const IMAGE_PATH = '/icon-512.png';
 
 function escapeHtml(value: string): string {
 	return value.replace(/[&<>"']/g, (character) => {
@@ -96,29 +94,18 @@ export function createSocialMetadata({
 		canonicalUrl.search = '';
 		canonicalUrl.hash = '';
 		const canonical = canonicalUrl.href;
-		const image = new URL(IMAGE_PATH, url.origin).href;
-		const description = title ? `Read the discussion on Hacker News: ${title}` : DESCRIPTION;
 		const pageTitle = title ? `${title} | ${SITE_NAME}` : SITE_NAME;
+		const socialTitle = title || SITE_NAME;
 		return [
 			`<title>${escapeHtml(pageTitle)}</title>`,
 			`<link rel="canonical" href="${escapeHtml(canonical)}" />`,
 			...Object.entries({
-				description,
 				'og:type': 'website',
 				'og:site_name': SITE_NAME,
-				'og:title': pageTitle,
-				'og:description': description,
+				'og:title': socialTitle,
 				'og:url': canonical,
-				'og:image': image,
-				'og:image:type': 'image/png',
-				'og:image:width': '512',
-				'og:image:height': '512',
-				'og:image:alt': 'HN Reader logo',
 				'twitter:card': 'summary',
-				'twitter:title': pageTitle,
-				'twitter:description': description,
-				'twitter:image': image,
-				'twitter:image:alt': 'HN Reader logo'
+				'twitter:title': socialTitle,
 			}).map(
 				([name, content]) =>
 					`<meta ${name.startsWith('og:') ? 'property' : 'name'}="${name}" content="${escapeHtml(content)}" />`
