@@ -8,6 +8,18 @@ function fixture(value: unknown, status = 200): typeof fetch {
 	return async () => Response.json(value, { status });
 }
 
+function assertNoImageOrDescription(tags: string): void {
+	for (const prefix of [
+		'<meta name="description"',
+		'<meta property="og:description"',
+		'<meta name="twitter:description"',
+		'<meta property="og:image',
+		'<meta name="twitter:image'
+	]) {
+		assert.ok(!tags.includes(prefix), `Unexpected tag: ${prefix}`);
+	}
+}
+
 test('generic feed metadata uses absolute URLs and removes query and fragment', async () => {
 	const metadata = createSocialMetadata({
 		fetchFn: async () => {
@@ -18,7 +30,8 @@ test('generic feed metadata uses absolute URLs and removes query and fragment', 
 		const url = new URL(`https://hn.example:8443${path}?spoofHost=evil&tracking=1#fragment`);
 		const tags = await metadata.tags(url);
 		assert.ok(tags.includes(`href="https://hn.example:8443${path}"`));
-		assert.ok(tags.includes('content="https://hn.example:8443/icon-512.png"'));
+		assert.ok(tags.includes('property="og:title" content="HN Reader"'));
+		assertNoImageOrDescription(tags);
 		assert.ok(tags.includes('name="twitter:card" content="summary"'));
 		assert.ok(!tags.includes('tracking'));
 		assert.ok(!tags.includes('spoofHost'));
@@ -43,6 +56,8 @@ test('fetches just the root item and escapes all upstream text', async () => {
 	assert.ok(tags.includes('A &amp; &quot;B&quot; &lt;script&gt; &#39;C&#39;'));
 	assert.ok(!tags.includes('<script>'));
 	assert.ok(tags.includes('property="og:url" content="https://hn.example/i/123"'));
+	assert.ok(tags.includes('name="twitter:title" content="A &amp; &quot;B&quot; &lt;script&gt; &#39;C&#39;"'));
+	assertNoImageOrDescription(tags);
 });
 
 test('normalizes title HTML entities and markup before escaping metadata', async () => {
@@ -56,8 +71,9 @@ test('normalizes title HTML entities and markup before escaping metadata', async
 	const tags = await metadata.tags(new URL('https://hn.example/i/123'));
 	const escaped = 'R&amp;D &quot;tools&quot; &#39;today&#39; &amp; \u00a9';
 	assert.ok(tags.includes(`<title>${escaped} | HN Reader</title>`));
-	assert.ok(tags.includes(`property="og:title" content="${escaped} | HN Reader"`));
-	assert.ok(tags.includes(`name="twitter:title" content="${escaped} | HN Reader"`));
+	assert.ok(tags.includes(`property="og:title" content="${escaped}"`));
+	assert.ok(tags.includes(`name="twitter:title" content="${escaped}"`));
+	assertNoImageOrDescription(tags);
 	assert.ok(!tags.includes('&amp;amp;'));
 	assert.ok(!tags.includes('<b>'));
 	assert.ok(!tags.includes('hidden'));
@@ -220,6 +236,8 @@ test('handle injects metadata into initial HTML across chunk boundaries without 
 	assert.ok(html.includes('<title>Initial HTML | HN Reader</title>'));
 	assert.ok(html.indexOf('property="og:title"') < html.indexOf('</head>'));
 	assert.ok(html.includes('<body><div id="app"></div></body>'));
+	assert.ok(html.includes('property="og:title" content="Initial HTML"'));
+	assertNoImageOrDescription(html);
 });
 
 test('data and non-HTML responses skip metadata fetching', async () => {
