@@ -1,0 +1,133 @@
+import type { Handle } from '@sveltejs/kit/hooks';
+
+const SITE_NAME = 'HN Reader';
+const DESCRIPTION = 'Read Hacker News stories and discussions with HN Reader.';
+const IMAGE_PATH = '/icon-512.png';
+
+function escapeHtml(value: string): string {
+	return value.replace(/[&<>"']/g, (character) => {
+		return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character]!;
+	});
+}
+
+function itemTitle(value: unknown, id: string): string | null {
+	if (!value || typeof value !== 'object') return null;
+	const item = value as Record<string, unknown>;
+	if (
+		item.id !== Number(id) ||
+		item.deleted ||
+		item.dead ||
+		!['story', 'job', 'poll'].includes(String(item.type)) ||
+		typeof item.title !== 'string'
+	)
+		return null;
+	return (
+		item.title
+			// Strip upstream control characters from HTML metadata.
+			// eslint-disable-next-line no-control-regex
+			.replace(/[\u0000-\u001f\u007f]/g, ' ')
+			.trim()
+			.slice(0, 300) || null
+	);
+}
+
+export function createSocialMetadata({
+	fetchFn = globalThis.fetch,
+	timeoutMs = 1500,
+	ttlMs = 5 * 60 * 1000,
+	failureTtlMs = 30 * 1000,
+	maxEntries = 256,
+	now = Date.now
+} = {}) {
+	const cache = new Map<string, { expires: number; title: Promise<string | null> }>();
+
+	async function lookup(id: string): Promise<string | null> {
+		const cached = cache.get(id);
+		if (cached && cached.expires > now()) return cached.title;
+		cache.delete(id);
+		if (cache.size >= maxEntries) cache.delete(cache.keys().next().value!);
+
+		const controller = new AbortController();
+		let timer: ReturnType<typeof setTimeout>;
+		const timeout = new Promise<null>((resolve) => {
+			timer = setTimeout(() => {
+				resolve(null);
+				controller.abort();
+			}, timeoutMs);
+		});
+		const request = Promise.resolve()
+			.then(async () => {
+				const response = await fetchFn(`https://hacker-news.firebaseio.com/v0/item/${id}.json`, {
+					signal: controller.signal,
+					headers: { accept: 'application/json' }
+				});
+				if (!response.ok) return null;
+				return itemTitle(await response.json(), id);
+			})
+			.catch(() => null);
+		const entry = { expires: Infinity, title: Promise.race([request, timeout]) };
+		cache.set(id, entry);
+		try {
+			const title = await entry.title;
+			entry.expires = now() + (title ? ttlMs : failureTtlMs);
+			return title;
+		} finally {
+			clearTimeout(timer!);
+		}
+	}
+
+	async function tags(url: URL): Promise<string> {
+		const id = /^\/i\/([1-9]\d*)\/?$/.exec(url.pathname)?.[1];
+		const title = id && Number.isSafeInteger(Number(id)) ? await lookup(id) : null;
+		const canonicalUrl = new URL(url);
+		canonicalUrl.search = '';
+		canonicalUrl.hash = '';
+		const canonical = canonicalUrl.href;
+		const image = new URL(IMAGE_PATH, url.origin).href;
+		const description = title ? `Read the discussion on Hacker News: ${title}` : DESCRIPTION;
+		const pageTitle = title ? `${title} | ${SITE_NAME}` : SITE_NAME;
+		return [
+			`<title>${escapeHtml(pageTitle)}</title>`,
+			`<link rel="canonical" href="${escapeHtml(canonical)}" />`,
+			...Object.entries({
+				description,
+				'og:type': 'website',
+				'og:site_name': SITE_NAME,
+				'og:title': pageTitle,
+				'og:description': description,
+				'og:url': canonical,
+				'og:image': image,
+				'og:image:type': 'image/png',
+				'og:image:width': '512',
+				'og:image:height': '512',
+				'og:image:alt': 'HN Reader logo',
+				'twitter:card': 'summary',
+				'twitter:title': pageTitle,
+				'twitter:description': description,
+				'twitter:image': image,
+				'twitter:image:alt': 'HN Reader logo'
+			}).map(
+				([name, content]) =>
+					`<meta ${name.startsWith('og:') ? 'property' : 'name'}="${name}" content="${escapeHtml(content)}" />`
+			)
+		].join('\n');
+	}
+
+	const handle: Handle = async ({ event, resolve }) => {
+		if (event.isDataRequest) return resolve(event);
+		let buffered = '';
+		return resolve(event, {
+			transformPageChunk: async ({ html, done }) => {
+				// Buffer chunks so a split head tag cannot skip metadata injection.
+				buffered += html;
+				if (!done) return '';
+				if (!buffered.includes('</head>')) return buffered;
+				const metadata = await tags(event.url);
+				return buffered
+					.replace('<title>HN Reader</title>', '')
+					.replace('</head>', `${metadata}</head>`);
+			}
+		});
+	};
+	return { tags, handle };
+}
