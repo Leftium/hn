@@ -56,7 +56,8 @@ test('fetches just the root item and escapes all upstream text', async () => {
 	assert.ok(tags.includes('A &amp; &quot;B&quot; &lt;script&gt; &#39;C&#39;'));
 	assert.ok(!tags.includes('<script>'));
 	assert.ok(tags.includes('property="og:url" content="https://hn.example/i/123"'));
-	assert.ok(tags.includes('name="twitter:title" content="A &amp; &quot;B&quot; &lt;script&gt; &#39;C&#39;"'));
+	const escapedTitle = 'A &amp; &quot;B&quot; &lt;script&gt; &#39;C&#39;';
+	assert.ok(tags.includes(`name="twitter:title" content="${escapedTitle}"`));
 	assertNoImageOrDescription(tags);
 });
 
